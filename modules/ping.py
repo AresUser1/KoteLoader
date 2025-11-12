@@ -1,9 +1,12 @@
 # modules/ping.py
-"""Утилита для проверки работоспособности юзербота.
+"""<manifest>
+version: 1.0.1
+source: https://github.com/AresUser1/KoteLoader/raw/main/modules/ping.py
+author: Kote
 
 Команды:
 • ping - Показать скорость ответа Telegram и время работы (аптайм).
-"""
+</manifest>"""
 
 import time
 from datetime import timedelta
@@ -11,6 +14,7 @@ from core import register
 from utils import database as db
 from main import START_TIME
 from utils.message_builder import build_and_edit
+from utils.security import check_permission
 from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold, MessageEntityCode
 from telethon.tl.functions.users import GetUsersRequest
 
@@ -25,7 +29,7 @@ def get_uptime() -> str:
 @register("ping", incoming=True)
 async def ping_cmd(event):
     """Проверяет скорость ответа API Telegram и аптайм бота."""
-    if db.get_user_level(event.sender_id) not in ["OWNER", "TRUSTED"]:
+    if not check_permission(event, min_level="TRUSTED"):
         return
 
     # Замеряем реальную задержку до API

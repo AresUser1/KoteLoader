@@ -1,6 +1,6 @@
 # modules/install.py
 """<manifest>
-version: 1.0.0
+version: 1.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
 
@@ -193,12 +193,8 @@ async def process_and_install(event, file_name, content, source_url=None, force=
 @register("install", incoming=True)
 async def install_cmd(event, force=False):
     """Главный обработчик команды install."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "},
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
     
     prefix = db.get_setting("prefix", default=".")
     url = (event.pattern_match.group(1) or "").strip()
@@ -219,18 +215,13 @@ async def install_cmd(event, force=False):
 @register("forceinstall", incoming=True)
 async def force_install_cmd(event):
     """Принудительная установка без проверки безопасности."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED (проверка будет в `install_cmd`)
     await install_cmd(event, force=True)
 
 @register("upload", incoming=True)
 async def upload_module(event, force=False):
     """Установка модуля из присланного файла."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "},
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
 
     reply = await event.get_reply_message()
     message_with_file = reply if reply and reply.media else event.message
@@ -249,24 +240,18 @@ async def upload_module(event, force=False):
 @register("forceupload", incoming=True)
 async def force_upload_module(event):
     """Принудительная установка из файла без проверки безопасности."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED (проверка будет в `upload_module`)
     await upload_module(event, force=True)
 
 @register("getm", incoming=True)
 async def get_module_cmd(event):
     """Отправляет файл модуля в чат."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "},
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
 
     module_name = event.pattern_match.group(1)
     if not module_name:
         return await build_and_edit(event, [{"text": "**Укажите имя модуля.**"}])
 
-    # ❗️ ИСПРАВЛЕНИЕ: Ищем модуль рекурсивно
     module_path = None
     potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))
     if potential_paths:
@@ -300,12 +285,8 @@ async def get_module_cmd(event):
 @register("remove", incoming=True)
 async def remove_module(event):
     """Удаляет модуль (файл) или пакет модулей (папку)."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "},
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
         
     name_to_remove = (event.pattern_match.group(1) or "").strip()
     if not name_to_remove:

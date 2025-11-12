@@ -1,6 +1,6 @@
 # modules/logs.py
 """<manifest>
-version: 1.0.0
+version: 1.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/logs.py
 author: Kote
 
@@ -50,12 +50,8 @@ def parse_log_line(line: str) -> list:
 @register("logs", incoming=True)
 async def logs_cmd(event):
     """Показывает последние записи из лог-файла с фильтрами."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Доступ к логам запрещен.", "entity": MessageEntityBold}
-        ])
+        return
 
     prefix = db.get_setting("prefix", default=".")
     args = event.message.text.split()[1:]
@@ -118,12 +114,8 @@ async def logs_cmd(event):
 @register("debug", incoming=True)
 async def debug_cmd(event):
     """Включает или выключает режим отладки."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Управлять режимом отладки могут только доверенные пользователи.", "entity": MessageEntityBold}
-        ])
+        return
 
     prefix = db.get_setting("prefix", default=".")
     args = event.message.text.split(maxsplit=1)

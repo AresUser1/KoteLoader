@@ -4,6 +4,10 @@
 Этот модуль позволяет гибко настраивать отображаемую информацию.
 
 <manifest>
+version: 1.0.1
+source: https://github.com/AresUser1/KoteLoader/raw/main/modules/profile.py
+author: Kote
+
 Команды:
 • info - Отобразить настроенную инфо-карточку.
 • setbio <текст> - Установить/изменить свое био (с форматированием).
@@ -36,7 +40,6 @@ from core import register
 from utils import database as db
 from main import START_TIME
 from utils.message_builder import build_message, build_and_edit
-# ❗️ ДОБАВЛЕН ИМПОРТ
 from utils.security import check_permission
 from telethon.tl.types import (
     MessageEntityBold, MessageEntityItalic, MessageEntityCode, MessageEntityPre,
@@ -45,14 +48,11 @@ from telethon.tl.types import (
 )
 from telethon.errors.rpcerrorlist import MessageNotModifiedError, DocumentInvalidError, MessageIdInvalidError
 
-# --- Вспомогательные функции ---
 
 def get_uptime() -> str:
-    """Возвращает время работы бота в читаемом формате."""
     return str(timedelta(seconds=int(time.time() - START_TIME)))
 
 def get_git_info() -> dict:
-    """Возвращает информацию из Git."""
     try:
         repo = git.Repo(search_parent_directories=True)
         branch = repo.active_branch.name
@@ -67,52 +67,42 @@ def get_git_info() -> dict:
     except Exception:
         return {"branch": "N/A", "commit_sha": "N/A", "commit_url": None, "status": "N/A"}
 
-# --- ❗️ ИСПРАВЛЕНА СИСТЕМА ЭМОДЗИ ---
-
 def _get_static_emojis() -> dict:
-    """Загружает кастомные СТАТИЧНЫЕ эмодзи (PAW_1, OWNER, CPU и т.д.) из БД."""
-    # ❗️ ВСЕ ID СБРОШЕНЫ НА 0, ЧТОБЫ НЕ БЫЛО ОШИБОК
     DEFAULT_STATIC_EMOJIS = {
-        "PAW_1":    {"id": 0, "fallback": "🐾"},
-        "PAW_2":    {"id": 0, "fallback": "🐾"},
-        "PAW_3":    {"id": 0, "fallback": "🐾"},
-        "OWNER":    {"id": 0, "fallback": "😎"},
-        "BIO":      {"id": 0, "fallback": "💬"},
-        "VERSION":  {"id": 0, "fallback": "💫"},
-        "BRANCH":   {"id": 0, "fallback": "🌳"},
-        "STATUS":   {"id": 0, "fallback": "😌"},
-        "PREFIX":   {"id": 0, "fallback": "⌨️"},
-        "UPTIME":   {"id": 0, "fallback": "⌛️"},
-        "CPU":      {"id": 0, "fallback": "⚡️"},
-        "RAM":      {"id": 0, "fallback": "💼"},
+        "PAW_1":    {"id": 5266969165893238430, "fallback": "🐾"},
+        "PAW_2":    {"id": 5266983901926029702, "fallback": "🐾"},
+        "PAW_3":    {"id": 5269523863980504823, "fallback": "🐾"},
+        "OWNER":    {"id": 5373141891321699086, "fallback": "😎"},
+        "BIO":      {"id": 6030784887093464891, "fallback": "💬"},
+        "VERSION":  {"id": 5469741319330996757, "fallback": "💫"},
+        "BRANCH":   {"id": 5449918202718985124, "fallback": "🌳"},
+        "STATUS":   {"id": 5370699111492229743, "fallback": "😌"},
+        "PREFIX":   {"id": 5472111548572900003, "fallback": "⌨️"},
+        "UPTIME":   {"id": 5451646226975955576, "fallback": "⌛️"},
+        "CPU":      {"id": 5431449001532594346, "fallback": "⚡️"},
+        "RAM":      {"id": 5359785904535774578, "fallback": "💼"},
     }
     custom_emojis = db.get_module_data("profile", "static_emojis", default={})
     return {**DEFAULT_STATIC_EMOJIS, **custom_emojis}
 
 def _get_os_emoji_mapping() -> dict:
-    """Загружает кастомные ДИНАМИЧЕСКИЕ эмодзи (для ОС) из БД."""
-    # ❗️ ВСЕ ID СБРОШЕНЫ НА 0
     DEFAULT_OS_EMOJIS = {
-        "Linux":    {"id": 0, "fallback": "🐧"},
-        "Ubuntu":   {"id": 0, "fallback": "🟠"},
-        "Mint":     {"id": 0, "fallback": "🟢"},
-        "Termux":   {"id": 0, "fallback": "⚫️"},
-        "JamHost":  {"id": 0, "fallback": "🍓"},
-        "Arch":     {"id": 0, "fallback": "🔵"},
-        "Debian":   {"id": 0, "fallback": "🔴"},
-        "Fedora":   {"id": 0, "fallback": "🔵"},
-        "Windows":  {"id": 0, "fallback": "🪟"},
-        "macOS":    {"id": 0, "fallback": "🍏"},
-        "Other":    {"id": 0, "fallback": "💻"}
+        "Linux":    {"id": 5361541227604878624, "fallback": "🐧"},
+        "Ubuntu":   {"id": 4985927121885988299, "fallback": "🟠"},
+        "Mint":     {"id": 5276194798594695653, "fallback": "🟢"},
+        "Termux":   {"id": 4985572151428907537, "fallback": "⚫️"},
+        "JamHost":  {"id": 5422884965593397853, "fallback": "🍓"},
+        "Arch":     {"id": 5275984632960001736, "fallback": "🔵"},
+        "Debian":   {"id": 4983489886859297852, "fallback": "🔴"},
+        "Fedora":   {"id": 5276032324276855015, "fallback": "🔵"},
+        "Windows":  {"id": 4985790451731661389, "fallback": "🪟"},
+        "macOS":    {"id": 4985915392330302373, "fallback": "🍏"},
+        "Other":    {"id": 5276027711481981374, "fallback": "💻"}
     }
     custom_emojis = db.get_module_data("profile", "os_emojis", default={})
     return {**DEFAULT_OS_EMOJIS, **custom_emojis}
 
 def _build_emoji_part(emoji_details: dict, force_fallback: bool = False) -> dict:
-    """
-    Умный сборщик. Всегда возвращает fallback и накладывает ID, если он есть.
-    force_fallback=True используется для рендера "безопасного режима".
-    """
     part = {"text": emoji_details.get('fallback', '❔')}
     if emoji_details.get('id') != 0 and not force_fallback:
         part["entity"] = MessageEntityCustomEmoji
@@ -120,7 +110,6 @@ def _build_emoji_part(emoji_details: dict, force_fallback: bool = False) -> dict
     return part
 
 def get_system_info() -> dict:
-    """Возвращает информацию о системе, включая детальное имя OS и эмодзи."""
     process = psutil.Process(os.getpid())
     cpu_usage = process.cpu_percent()
     ram_usage = process.memory_info().rss / (1024 * 1024)
@@ -151,21 +140,18 @@ def get_system_info() -> dict:
     os_emoji_details = os_emoji_mapping.get(os_name, os_emoji_mapping["Other"])
     return {"cpu": cpu_usage, "ram": ram_usage, "os_name": os_name, "os_emoji": os_emoji_details}
 
-# --- Команды управления профилем (Bio, Fields) ---
 
 @register("setbio", incoming=True)
 async def setbio_cmd(event):
-    """Устанавливает кастомное био (с поддержкой форматирования)."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     prefix = db.get_setting('prefix', '.')
     if not event.pattern_match.group(1):
         return await build_and_edit(event, [
             {"text": "❌ ... Вы не указали текст ..."},
             {"text": f"\nПример: {prefix}setbio ...", "entity": MessageEntityCode},
-        ]) # (сокращено)
+        ])
 
     match = event.pattern_match
     text_content = match.group(1)
@@ -183,17 +169,15 @@ async def setbio_cmd(event):
 
 @register("addfield", incoming=True)
 async def addfield_cmd(event):
-    """Добавляет кастомное поле (с поддержкой форматирования в значении)."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     args = event.pattern_match.group(1)
     prefix = db.get_setting('prefix', '.')
     if not args or "|" not in args:
         return await build_and_edit(event, [
              {"text": "❌ ... Неверный формат ..."},
-        ]) # (сокращено)
+        ])
     
     try:
         split_pos = args.find("|")
@@ -220,14 +204,12 @@ async def addfield_cmd(event):
     fields = db.get_module_data("profile", "fields_data_v2", default={})
     fields[name] = {"text": value_raw, "entities": entities_list}
     db.set_module_data("profile", "fields_data_v2", fields)
-    await build_and_edit(event, [{"text": "✅ ... Поле ... добавлено ..."}]) # (сокращено)
+    await build_and_edit(event, [{"text": "✅ ... Поле ... добавлено ..."}])
 
 @register("delfield", incoming=True)
 async def delfield_cmd(event):
-    """Удаляет кастомное поле из профиля."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     name = event.pattern_match.group(1)
     if not name:
@@ -242,10 +224,8 @@ async def delfield_cmd(event):
 
 @register("setpfp", incoming=True)
 async def setpfp_cmd(event):
-    """Устанавливает медиа для профиля."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     reply = await event.get_reply_message()
     if not reply or not reply.media:
@@ -256,20 +236,14 @@ async def setpfp_cmd(event):
 
 @register("delpfp", incoming=True)
 async def delpfp_cmd(event):
-    """Удаляет медиа из профиля."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     db.set_setting("profile_media", "")
     await build_and_edit(event, [{"text": "🗑️ "}, {"text": "Медиа для профиля удалено.", "entity": MessageEntityBold}])
 
-# --- Команды управления эмодзи ---
 
 async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
-    """
-    Умный парсер. Ищет ID в тексте ИЛИ в entity (вставленный премиум-эмодзи).
-    """
     prefix = db.get_setting('prefix', '.')
     args_str = event.pattern_match.group(1)
     fallback_char = "❔"
@@ -286,7 +260,7 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
         return {"error": [
             {"text": "❌ ... Неверный формат ..."},
             {"text": f"\nПример: {prefix}{cmd_name} {example_key} ...", "entity": MessageEntityCode}
-        ]} # (сокращено)
+        ]}
 
     parts = args_before_pipe.split()
     key = parts[0]
@@ -320,10 +294,8 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
 
 @register("setpemoji", incoming=True)
 async def setpemoji_cmd(event):
-    """Устанавливает кастомный статичный эмодзи (OWNER, CPU, PAW_1 и т.д.)."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     parsed = await _parse_emoji_args(event, "setpemoji", "OWNER")
     if "error" in parsed:
@@ -338,10 +310,8 @@ async def setpemoji_cmd(event):
 
 @register("delpemoji", incoming=True)
 async def delpemoji_cmd(event):
-    """Сбрасывает статичный эмодзи до дефолтного."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     key_upper = (event.pattern_match.group(1) or "").upper()
     if not key_upper:
@@ -356,10 +326,8 @@ async def delpemoji_cmd(event):
 
 @register("pemojis", incoming=True)
 async def pemojis_cmd(event):
-    """Показывает текущие настройки статичных эмодзи."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     parts = [{"text": "⚙️ ..."}, {"text": "\n(Кастомные из БД ...)\n\n"}]
     mapping = _get_static_emojis()
@@ -377,10 +345,8 @@ async def pemojis_cmd(event):
 
 @register("setosemoji", incoming=True)
 async def setosemoji_cmd(event):
-    """Устанавливает кастомный эмодзи для ОС."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     parsed = await _parse_emoji_args(event, "setosemoji", "Ubuntu")
     if "error" in parsed:
@@ -393,10 +359,8 @@ async def setosemoji_cmd(event):
 
 @register("delosemoji", incoming=True)
 async def delosemoji_cmd(event):
-    """Сбрасывает эмодзи для ОС до дефолтного."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     os_name = (event.pattern_match.group(1) or "").capitalize()
     if not os_name:
@@ -411,10 +375,8 @@ async def delosemoji_cmd(event):
 
 @register("osemojis", incoming=True)
 async def osemojis_cmd(event):
-    """Показывает текущие настройки эмодзи для ОС."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     parts = [{"text": "⚙️ ..."}, {"text": "\n(Кастомные из БД ...)\n\n"}]
     mapping = _get_os_emoji_mapping()
@@ -432,10 +394,8 @@ async def osemojis_cmd(event):
 
 @register("resetemojis", incoming=True)
 async def resetemojis_cmd(event):
-    """Сбрасывает ВСЕ настройки .setpemoji и .setosemoji до дефолтных."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     db.set_module_data("profile", "static_emojis", {})
     db.set_module_data("profile", "os_emojis", {})
@@ -445,16 +405,7 @@ async def resetemojis_cmd(event):
     ])
 
 
-# --- ❗️ ГЛАВНАЯ КОМАНДА (ИСПРАВЛЕНА) ---
-
 async def _build_info_parts(client, force_fallback: bool = False) -> list:
-    """Собирает 'parts' list для .info.
-    
-    Args:
-        client: Экземпляр Telethon клиента.
-        force_fallback: Если True, рендерит *только* текстовые fallback-эмодзи.
-    """
-    
     ENTITY_MAP = {
         'MessageEntityBold': MessageEntityBold, 'MessageEntityItalic': MessageEntityItalic,
         'MessageEntityCode': MessageEntityCode, 'MessageEntityTextUrl': MessageEntityTextUrl,
@@ -524,7 +475,6 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
             parts.append({"text": "\n"})
         parts.append({"text": "\n"}) 
 
-    # --- Стандартный блок ---
     parts.append(_build_emoji_part(emojis['VERSION'], force_fallback))
     parts.append({"text": " Версия: 1.0.0 ", "entity": MessageEntityBold})
     commit_url = git_info.get("commit_url")
@@ -576,17 +526,8 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
 
 @register("setinfo", incoming=True)
 async def setinfo_cmd(event):
-    """Устанавливает полностью кастомный текст для `.info`.
-
-    Пример использования:
-    `.setinfo Привет, это мой кастомный текст!`
-
-    Текст может содержать форматирование. Все entities будут сохранены и отображены
-    как есть при выполнении `.info`.
-    """
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     prefix = db.get_setting('prefix', '.')
     raw = event.raw_text or event.text or ''
@@ -594,36 +535,28 @@ async def setinfo_cmd(event):
     text_content = ''
     entities_list = []
 
-    # Если сообщение начинается с команды, пытаемся извлечь весь текст после неё
     if raw.lower().startswith(cmd_prefix.lower()):
-        # Обрезаем команду и оставляем всё остальное
         text_content = raw[len(cmd_prefix):].lstrip()
         if text_content:
-            # Вычисляем смещение относительно начала исходного сообщения
             content_offset = len(raw) - len(text_content)
             if event.entities:
                 for e in event.entities:
-                    # Игнорируем сущности внутри команды
                     if e.offset >= content_offset:
                         new_e = e.to_dict()
                         new_e['offset'] = new_e['offset'] - content_offset
                         entities_list.append(new_e)
-    # Если текст не найден, пытаемся использовать текст из ответа
     if not text_content:
         reply = await event.get_reply_message()
         if reply and (reply.raw_text or reply.text):
             text_content = reply.raw_text or reply.text
-            # Используем entities из ответа без смещения
             if reply.entities:
                 entities_list = [e.to_dict() for e in reply.entities]
-    # Если всё ещё нет текста — выводим подсказку
     if not text_content:
         return await build_and_edit(event, [
             {"text": "❌ ... Вы не указали текст ..."},
             {"text": f"\nМожно либо указать текст после команды, либо ответить на сообщение с нужным содержимым.", "entity": MessageEntityItalic},
             {"text": f"\nПример: {prefix}setinfo Привет!", "entity": MessageEntityCode},
         ])
-    # Сохраняем текст и связанные entities
     info_data = {"text": text_content, "entities": entities_list}
     db.set_module_data("profile", "custom_info_v2", info_data)
     await build_and_edit(event, [
@@ -634,15 +567,9 @@ async def setinfo_cmd(event):
 
 @register("delinfo", incoming=True)
 async def delinfo_cmd(event):
-    """Сбрасывает кастомный текст для `.info`.
-
-    После выполнения этой команды профиль будет отображать стандартную информационную карточку.
-    """
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
-    # Удаляем сохранённые данные о кастомном info
     db.set_module_data("profile", "custom_info_v2", None)
     await build_and_edit(event, [
         {"text": "🗑️ ", "entity": MessageEntityBold},
@@ -652,32 +579,23 @@ async def delinfo_cmd(event):
 
 @register("infovars", incoming=True)
 async def infovars_cmd(event):
-    """Показывает список плейсхолдеров для .setinfo."""
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
-    # ❗️ ИСПРАВЛЕНИЕ: Получаем префикс из БД
     prefix = db.get_setting("prefix", default=".")
     
     try:
-        # Пытаемся взять эмодзи 'PREFIX' (⌨️) из _get_static_emojis
         emojis = _get_static_emojis()
         emoji_part = _build_emoji_part(emojis.get('PREFIX', {"id": 0, "fallback": "⌨️"}))
     except NameError:
-        # Если что-то пошло не так (например, функция не найдена), используем fallback
         emoji_part = {"text": "⌨️"}
 
     parts = [
         emoji_part,
         {"text": " Переменные для ", "entity": MessageEntityBold},
-        # ❗️ ИСПРАВЛЕНИЕ: Используем динамический префикс
         {"text": f"{prefix}setinfo", "entity": MessageEntityCode},
         {"text": "\n\n", "entity": MessageEntityBold},
-        {"text": "Эти плейсхолдеры будут заменены на актуальные данные, если они есть в тексте, установленном через ", "entity": MessageEntityItalic},
-        # ❗️ ИСПРАВЛЕНИЕ: Используем динамический префикс
-        {"text": f"{prefix}setinfo", "entity": MessageEntityCode},
-        {"text": ":\n\n", "entity": MessageEntityItalic},
+        {"text": "Плейсхолдеры будут заменены на актуальные данные:\n\n", "entity": MessageEntityItalic},
         
         {"text": "• ", "entity": MessageEntityBold},
         {"text": "{owner}", "entity": MessageEntityCode},
@@ -697,28 +615,37 @@ async def infovars_cmd(event):
         
         {"text": "• ", "entity": MessageEntityBold},
         {"text": "{os}", "entity": MessageEntityCode},
-        {"text": " - Название ОС\n"},
+        {"text": " - Название ОС\n\n"},
+
+        {"text": "Вы также можете использовать ", "entity": MessageEntityItalic},
+        {"text": "{emoji:KEY}", "entity": MessageEntityCode},
+        {"text": " для вставки эмодзи из ", "entity": MessageEntityItalic},
+        {"text": f"{prefix}pemojis", "entity": MessageEntityCode},
+        {"text": " и ", "entity": MessageEntityItalic},
+        {"text": f"{prefix}osemojis", "entity": MessageEntityCode},
+        {"text": ":\n", "entity": MessageEntityItalic},
+
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{emoji:CPU}", "entity": MessageEntityCode},
+        {"text": ", "},
+        {"text": "{emoji:RAM}", "entity": MessageEntityCode},
+        {"text": ", "},
+        {"text": "{emoji:OWNER}", "entity": MessageEntityCode},
+        {"text": " (и т.д.)\n"},
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{emoji:os_emoji}", "entity": MessageEntityCode},
+        {"text": " - (Эмодзи для текущей ОС)"},
     ]
     await build_and_edit(event, parts)
 
 
 @register("info", incoming=True)
 async def profile_cmd(event):
-    """Показывает продвинутую информацию о боте.
-
-    Если пользователь установил кастомный текст через `.setinfo`, то он
-    отображается в приоритете. В противном случае строится стандартная
-    инфо‑карточка с данными о владельце, био, версии, ветке, статусе, префиксе,
-    аптайме, загрузке CPU/RAM и операционной системе.
-    """
-    # ❗️ ДОБАВЛЕНА ПРОВЕРКА
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
-    # Проверяем наличие кастомного info
     custom_info = db.get_module_data("profile", "custom_info_v2", default=None)
     if custom_info:
-        # Реконструируем entities из сохранённого словаря
         ENTITY_MAP = {
             'MessageEntityBold': MessageEntityBold,
             'MessageEntityItalic': MessageEntityItalic,
@@ -741,91 +668,101 @@ async def profile_cmd(event):
                     reconstructed.append(ENTITY_MAP[class_name](**params))
             return reconstructed
         
-        # Подготовка данных для замены плейсхолдеров
         original_text = custom_info.get('text', '') or ''
         owner_id = db.get_users_by_level("OWNER")[0]
         owner_entity = await event.client.get_entity(owner_id)
         sys_info = get_system_info()
         
-        replacements = {
+        text_replacements = {
             "{owner}": f"{owner_entity.first_name}",
             "{uptime}": get_uptime(),
             "{cpu}": f"{sys_info['cpu']:.1f} %",
             "{ram}": f"{sys_info['ram']:.2f} MB",
             "{os}": sys_info['os_name'],
         }
+
+        emoji_replacements = {}
+        static_emojis = _get_static_emojis()
+        for key, details in static_emojis.items():
+            emoji_replacements[f"{{emoji:{key.upper()}}}"] = details
         
-        # Проверяем наличие плейсхолдеров
-        contains_placeholder = any(ph in original_text for ph in replacements.keys())
+        emoji_replacements["{emoji:os_emoji}"] = sys_info['os_emoji']
         
-        # Реконструируем entities
+        contains_text_ph = any(ph in original_text for ph in text_replacements.keys())
+        contains_emoji_ph = any(ph in original_text for ph in emoji_replacements.keys())
+        
         entities = reconstruct_entities(custom_info.get('entities') or [])
-        
-        if contains_placeholder:
-            # === МАГИЯ: Подстановка с пересчётом смещений И длин ===
-            text = original_text
+        text = original_text
+
+        if contains_text_ph or contains_emoji_ph:
             
-            # Создаём список замен с их позициями
             replacements_positions = []
-            for placeholder, value in replacements.items():
+            
+            for placeholder, value in text_replacements.items():
                 pos = 0
                 while True:
                     pos = text.find(placeholder, pos)
-                    if pos == -1:
-                        break
+                    if pos == -1: break
                     replacements_positions.append((pos, placeholder, value))
                     pos += len(placeholder)
             
-            # Сортируем по позиции (слева направо)
+            for placeholder, details in emoji_replacements.items():
+                pos = 0
+                while True:
+                    pos = text.find(placeholder, pos)
+                    if pos == -1: break
+                    replacements_positions.append((pos, placeholder, details)) 
+                    pos += len(placeholder)
+            
             replacements_positions.sort(key=lambda x: x[0])
             
-            # Выполняем замены и корректируем entities
             new_text = ""
             last_pos = 0
-            cumulative_shift = 0  # Накопленный сдвиг для корректировки offset
             
-            for pos, placeholder, value in replacements_positions:
-                # Добавляем текст до плейсхолдера
+            for pos, placeholder, replacement_data in replacements_positions:
+                is_emoji_replacement = isinstance(replacement_data, dict)
+                
+                if is_emoji_replacement:
+                    value = replacement_data['fallback']
+                    details = replacement_data
+                else:
+                    value = replacement_data
+                    details = None
+
                 new_text += text[last_pos:pos]
                 
-                # Считаем сдвиг в UTF-16 (Telegram использует UTF-16 для offset)
                 old_len_utf16 = len(placeholder.encode('utf-16-le')) // 2
                 new_len_utf16 = len(value.encode('utf-16-le')) // 2
                 shift = new_len_utf16 - old_len_utf16
                 
-                # ✅ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: считаем позицию в НОВОМ тексте (уже частично изменённом)
                 current_pos_utf16 = len(new_text.encode('utf-16-le')) // 2
                 
-                # Корректируем entities
                 for entity in entities:
                     entity_start = entity.offset
                     entity_end = entity.offset + entity.length
-                    
-                    # Премиум-эмодзи и ссылки НЕ ДОЛЖНЫ менять length
                     is_fixed_length = isinstance(entity, (MessageEntityCustomEmoji, MessageEntityTextUrl))
                     
-                    # Если entity начинается ПОСЛЕ текущей позиции плейсхолдера — сдвигаем offset
                     if entity_start >= current_pos_utf16 + old_len_utf16:
                         entity.offset += shift
-                    
-                    # Если entity ОХВАТЫВАЕТ текущую позицию — увеличиваем length (кроме эмодзи)
                     elif entity_start <= current_pos_utf16 < entity_end:
                         if not is_fixed_length:
                             entity.length += shift
                 
-                # Добавляем замену
+                if is_emoji_replacement and details.get('id', 0) != 0:
+                    entities.append(
+                        MessageEntityCustomEmoji(
+                            offset=current_pos_utf16, 
+                            length=new_len_utf16, 
+                            document_id=details['id']
+                        )
+                    )
+
                 new_text += value
                 last_pos = pos + len(placeholder)
-                cumulative_shift += shift
             
-            # Добавляем остаток текста
             new_text += text[last_pos:]
             text = new_text
-        else:
-            # Если плейсхолдеров нет — просто берём оригинальный текст
-            text = original_text
         
-        # === ОБРАБОТКА МЕДИА (БАГ #1 FIX) ===
         media_pointer_str = db.get_setting("profile_media")
         media = None
         if media_pointer_str:
@@ -837,7 +774,6 @@ async def profile_cmd(event):
             except Exception:
                 db.set_setting("profile_media", "")
         
-        # Отправляем с медиа или без
         try:
             if media:
                 await event.client.send_file(
@@ -849,21 +785,17 @@ async def profile_cmd(event):
                 )
                 await event.delete()
             else:
-                await event.edit(text, formatting_entities=entities or None, link_preview=False)
+                await build_and_edit(event, [{"text": text}], formatting_entities=entities, link_preview=False)
         except Exception as e:
-            # Если сломалось — показываем без форматирования
             fallback_text = f"⚠️ Ошибка рендера:\n`{type(e).__name__}`\n\n{text}"
             if media:
                 await event.client.send_file(event.chat_id, media, caption=fallback_text, link_preview=False)
-                try:
-                    await event.delete()
-                except:
-                    pass
+                try: await event.delete()
+                except: pass
             else:
                 await event.edit(fallback_text, link_preview=False)
         return
 
-    # Далее строим стандартную info карточку (твой старый код)
     event_deleted = False
     try:
         parts = await _build_info_parts(event.client, force_fallback=False)

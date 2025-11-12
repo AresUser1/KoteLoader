@@ -1,4 +1,12 @@
 # modules/help.py
+"""<manifest>
+version: 1.0.1
+source: https://github.com/AresUser1/KoteLoader/raw/main/modules/help.py
+author: Kote
+
+Команды:
+• help [команда] - Показывает справку по командам
+</manifest>"""
 
 from collections import defaultdict
 from telethon.tl.types import MessageEntityBlockquote, MessageEntityCustomEmoji, MessageEntityBold, MessageEntityItalic, MessageEntityCode
@@ -16,15 +24,13 @@ INFO_EMOJI_ID = 5879813604068298387  # ℹ️
 USAGE_EMOJI_ID = 5197195523794157505  # ▫️
 
 # Список системных модулей
-SYSTEM_MODULES = ["admin", "help", "install", "modules", "updater", "logs", "ping", "profile", "config", "hider", "power", "git_manager"] # ❗️ Добавлен твой новый модуль
+SYSTEM_MODULES = ["admin", "help", "install", "modules", "updater", "logs", "ping", "profile", "config", "hider", "power", "git_manager"]
 
-# ❗️❗️ ИЗМЕНЕНИЕ: Добавлено incoming=True, чтобы TRUSTED пользователи могли его вызывать
 @register("help", incoming=True)
 async def help_cmd(event):
     """Показывает справку по командам."""
     if not check_permission(event, min_level="TRUSTED"):
-        # Используем build_and_edit, который теперь умеет отвечать
-        return await build_and_edit(event, [{"text": "🚫 "}, {"text": "Доступ запрещен.", "entity": MessageEntityBold}])
+        return
         
     args = event.pattern_match.group(1)
 
@@ -40,7 +46,6 @@ async def help_cmd(event):
             cmd_module = cmd_info_list[0].get("module")
 
         if not cmd_info_list or cmd_module in hidden_modules:
-            # ❗️ ИЗМЕНЕНИЕ: Используем build_and_edit
             return await build_and_edit(event, [
                 {"text": "❌ "}, 
                 {"text": "Команда ", "entity": MessageEntityBold},
@@ -64,7 +69,6 @@ async def help_cmd(event):
             {"text": " Использование: ", "entity": MessageEntityBold},
             {"text": f"{prefix}{command_name} {usage_text}", "entity": MessageEntityCode},
         ]
-        # ❗️ ИЗМЕНЕНИЕ: Используем build_and_edit
         await build_and_edit(event, parts)
 
     # --- Функция для общего списка команд ---
@@ -136,8 +140,6 @@ async def help_cmd(event):
 
         final_text = "".join(text_parts).strip()
         
-        # ❗️❗️❗️ ВОТ ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ ❗️❗️❗️
-        # Мы проверяем, исходящее ли это сообщение, и либо редактируем, либо отвечаем.
         if event.out:
             await event.edit(final_text, formatting_entities=entities, link_preview=False)
         else:

@@ -1,6 +1,6 @@
 # modules/hider.py
 """<manifest>
-version: 1.0.0
+version: 1.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/hider.py
 author: Kote
 
@@ -23,10 +23,7 @@ class HiderModule(Module):
     async def hide_cmd(self, event):
         """Скрывает модуль из списка .help."""
         if not check_permission(event, min_level="TRUSTED"):
-            return await build_and_edit(event, [
-                {"text": "🚫 "},
-                {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-            ])
+            return
             
         module_to_hide = event.pattern_match.group(1)
         if not module_to_hide:
@@ -43,10 +40,7 @@ class HiderModule(Module):
     async def unhide_cmd(self, event):
         """Показывает модуль в списке .help."""
         if not check_permission(event, min_level="TRUSTED"):
-            return await build_and_edit(event, [
-                {"text": "🚫 "},
-                {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-            ])
+            return
             
         module_to_unhide = event.pattern_match.group(1)
         if not module_to_unhide:
@@ -63,10 +57,7 @@ class HiderModule(Module):
     async def hidden_cmd(self, event):
         """Показывает список скрытых модулей."""
         if not check_permission(event, min_level="TRUSTED"):
-            return await build_and_edit(event, [
-                {"text": "🚫 "},
-                {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-            ])
+            return
             
         hidden_list = db.get_hidden_modules()
         if not hidden_list:

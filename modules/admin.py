@@ -1,6 +1,6 @@
 # modules/admin.py
 """<manifest>
-version: 1.0.0
+version: 1.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 
@@ -38,12 +38,8 @@ CLOCK_EMOJI_ID = 5778605968208170641
 @register("prefix", incoming=True)
 async def set_prefix(event):
     """Устанавливает или показывает префикс команд."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
         
     prefix = db.get_setting("prefix", default=".")
     args = event.message.text.split(maxsplit=1)
@@ -70,11 +66,8 @@ async def set_prefix(event):
 @register("restart", incoming=True)
 async def restart_bot(event):
     """Перезапускает юзербота с отчётом о статусе."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
     
     db.set_setting("restart_report_chat_id", str(event.chat_id))
     
@@ -155,12 +148,8 @@ async def untrust_user(event):
 @register("db_stats", incoming=True)
 async def show_db_stats(event):
     """Показывает статистику использования БД модулями."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
     
     try:
         stats = db.get_modules_stats()
@@ -208,12 +197,8 @@ async def show_db_stats(event):
 @register("db_clear", incoming=True)
 async def clear_module_data(event):
     """Очищает все данные конкретного модуля из БД."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
     
     prefix = db.get_setting("prefix", default=".")
     args = event.message.text.split(maxsplit=1)
@@ -273,12 +258,8 @@ async def clear_module_data(event):
 @register("db_backup", incoming=True)
 async def backup_database(event):
     """Создает резервную копию базы данных."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
     
     try:
         db_file = Path(__file__).parent.parent / "database.db"

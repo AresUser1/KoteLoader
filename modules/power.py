@@ -1,6 +1,6 @@
 # modules/power.py
 """<manifest>
-version: 1.0.0
+version: 1.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/power.py
 author: Kote
 
@@ -23,7 +23,6 @@ POWER_OFF_ID = 5818665600624365278
 @register("on", incoming=True)
 async def bot_on_cmd(event):
     """Включает юзербота."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -36,7 +35,6 @@ async def bot_on_cmd(event):
 @register("off", incoming=True)
 async def bot_off_cmd(event):
     """Выключает юзербота."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
         return
 

@@ -1,6 +1,6 @@
 # modules/config.py
 """<manifest>
-version: 1.0.0
+version: 1.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/config.py
 author: Kote
 
@@ -19,12 +19,8 @@ from telethon.tl.types import MessageEntityBold, MessageEntityCode
 @register("setpfp", incoming=True)
 async def set_profile_pic(event):
     """Копирует медиа в 'Избранное' и сохраняет ссылку для команды .info."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "},
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
 
     reply = await event.get_reply_message()
     if not reply or not reply.media:
@@ -51,12 +47,8 @@ async def set_profile_pic(event):
 @register("setrepo", incoming=True)
 async def set_repo_url(event):
     """Устанавливает URL репозитория для .info."""
-    # ❗️ ИЗМЕНЕНО: с OWNER на TRUSTED
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 "},
-            {"text": "Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
 
     prefix = db.get_setting("prefix", default=".")
     args = event.message.text.split(maxsplit=1)

@@ -55,7 +55,7 @@ def increment_version(version: str) -> str:
 async def set_repo_alias(event):
     """Алиас для команды .setrepo, сохраняет URL репозитория."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}])
+        return
 
     prefix = db.get_setting("prefix", default=".")
     args = event.message.text.split(maxsplit=1)
@@ -95,7 +95,7 @@ async def set_gh_token(event):
 async def upload_module_cmd(event):
     """Автоматически обновляет версию и загружает модуль на GitHub."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}])
+        return
 
     module_name = (event.pattern_match.group(1) or "").strip()
     if not module_name:

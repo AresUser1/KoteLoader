@@ -2,7 +2,7 @@
 """Управление модулями: загрузка, выгрузка, перезагрузка и просмотр информации.
 
 <manifest>
-version: 1.0.0
+version: 1.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/modules.py
 author: Kote
 
@@ -125,9 +125,7 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
 async def setmodemoji_cmd(event):
     """Устанавливает кастомный статичный эмодзи для модуля modules."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
         
     parsed = await _parse_emoji_args(event, "setmodemoji", "PACKAGE")
     if "error" in parsed:
@@ -147,9 +145,7 @@ async def setmodemoji_cmd(event):
 async def delmodemoji_cmd(event):
     """Сбрасывает статичный эмодзи для модуля modules."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
         
     key_upper = (event.pattern_match.group(1) or "").upper()
     if not key_upper:
@@ -166,9 +162,7 @@ async def delmodemoji_cmd(event):
 async def modemojis_cmd(event):
     """Показывает текущие настройки статичных эмодзи для modules.py."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
         
     parts = [
         {"text": "⚙️ "}, 
@@ -192,9 +186,7 @@ async def modemojis_cmd(event):
 async def list_modules(event):
     """Показывает детальный список всех модулей."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
         
     emojis = _get_static_emojis()
     prefix = db.get_setting("prefix", default=".")
@@ -269,9 +261,7 @@ async def list_modules(event):
 async def module_info(event):
     """Показывает подробную информацию о модуле."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [
-            {"text": "🚫 Доступ запрещен.", "entity": MessageEntityBold}
-        ])
+        return
         
     emojis = _get_static_emojis()
     prefix = db.get_setting("prefix", default=".")
@@ -377,7 +367,7 @@ async def module_info(event):
 async def load_cmd(event):
     """Загружает указанный модуль."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 Доступ запрещен."}])
+        return
         
     prefix = db.get_setting("prefix", default=".")
     module_name = event.pattern_match.group(1)
@@ -398,7 +388,7 @@ async def load_cmd(event):
 async def unload_cmd(event):
     """Выгружает указанный модуль."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 Доступ запрещен."}])
+        return
         
     prefix = db.get_setting("prefix", default=".")
     module_name = event.pattern_match.group(1)
@@ -418,7 +408,7 @@ async def unload_cmd(event):
 async def reload_cmd(event):
     """Перезагружает указанный модуль."""
     if not check_permission(event, min_level="TRUSTED"):
-        return await build_and_edit(event, [{"text": "🚫 Доступ запрещен."}])
+        return
         
     prefix = db.get_setting("prefix", default=".")
     module_name = event.pattern_match.group(1)
