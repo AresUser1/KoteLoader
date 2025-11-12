@@ -34,6 +34,7 @@ import json
 import os
 import re
 from datetime import timedelta
+from pathlib import Path
 import psutil
 import git
 from core import register
@@ -41,6 +42,7 @@ from utils import database as db
 from main import START_TIME
 from utils.message_builder import build_message, build_and_edit
 from utils.security import check_permission
+from services.module_info_cache import parse_manifest
 from telethon.tl.types import (
     MessageEntityBold, MessageEntityItalic, MessageEntityCode, MessageEntityPre,
     MessageEntityUnderline, MessageEntityStrike, MessageEntityCustomEmoji,
@@ -429,6 +431,17 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
     git_info = get_git_info()
     sys_info = get_system_info() 
 
+    # ❗️❗️❗️ ВОТ ИЗМЕНЕНИЕ ❗️❗️❗️
+    # Динамически получаем версию из манифеста этого файла
+    try:
+        current_file_path = Path(__file__)
+        content = current_file_path.read_text(encoding='utf-8')
+        manifest = parse_manifest(content)
+        version = manifest.get("version", "N/A")
+    except Exception:
+        version = "N/A"
+    # ❗️❗️❗️ КОНЕЦ ИЗМЕНЕНИЯ ❗️❗️❗️
+
     parts = [
         _build_emoji_part(emojis['PAW_1'], force_fallback),
         _build_emoji_part(emojis['PAW_2'], force_fallback),
@@ -476,7 +489,8 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
         parts.append({"text": "\n"}) 
 
     parts.append(_build_emoji_part(emojis['VERSION'], force_fallback))
-    parts.append({"text": " Версия: 1.0.1 ", "entity": MessageEntityBold})
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Используем динамическую версию ❗️❗️❗️
+    parts.append({"text": f" Версия: {version} ", "entity": MessageEntityBold})
     commit_url = git_info.get("commit_url")
     if commit_url:
         parts.append({"text": f"#{git_info['commit_sha']}", "entity": MessageEntityTextUrl, "kwargs": {"url": commit_url}})
