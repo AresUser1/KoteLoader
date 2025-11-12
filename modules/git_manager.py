@@ -1,6 +1,6 @@
 # modules/git_manager.py
 """<manifest>
-version: 1.0.2
+version: 1.0.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/git_manager.py
 author: Kote
 

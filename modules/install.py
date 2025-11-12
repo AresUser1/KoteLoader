@@ -1,6 +1,6 @@
 # modules/install.py
 """<manifest>
-version: 1.0.1
+version: 1.0.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
 
@@ -45,13 +45,13 @@ async def _install_from_py_url(event, url, force=False):
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status != 200:
-                    return await build_and_edit(event, [{"text": f"**Ошибка скачивания: HTTP {response.status}**"}])
+                    return await build_and_edit(event, [{"text": f"<b>Ошибка скачивания: HTTP {response.status}</b>"}])
                 content = await response.text(encoding='utf-8')
         
         file_name = os.path.basename(urlparse(url).path)
         await process_and_install(event, file_name, content, source_url=url, force=force)
     except Exception as e:
-        await build_and_edit(event, [{"text": f"**Критическая ошибка при установке:**\n`{e}`"}])
+        await build_and_edit(event, [{"text": f"<b>Критическая ошибка при установке:</b>\n<code>{e}</code>"}])
 
 async def _install_from_git_repo(event, url, force=False):
     """Логика для установки из GitHub репозитория."""
@@ -64,7 +64,7 @@ async def _install_from_git_repo(event, url, force=False):
             {"text": " Пакет модулей (папка) с таким именем уже существует.", "entity": MessageEntityBold}
         ])
 
-    await build_and_edit(event, [{"text": f"⚙️ **Начинаю клонирование репозитория `{repo_name}`...**"}])
+    await build_and_edit(event, [{"text": f"⚙️ <b>Начинаю клонирование репозитория <code>{repo_name}</code>...</b>"}])
     
     if target_dir.exists():
         shutil.rmtree(target_dir)
@@ -78,13 +78,13 @@ async def _install_from_git_repo(event, url, force=False):
 
     if process.returncode != 0:
         error_message = stderr.decode().strip() or stdout.decode().strip()
-        return await build_and_edit(event, [{"text": f"**❌ Ошибка при клонировании:**\n`{error_message}`"}])
+        return await build_and_edit(event, [{"text": f"<b>❌ Ошибка при клонировании:</b>\n<code>{error_message}</code>"}])
 
-    await build_and_edit(event, [{"text": "✅ **Репозиторий успешно склонирован.**"}])
+    await build_and_edit(event, [{"text": "✅ <b>Репозиторий успешно склонирован.</b>"}])
     
     req_path = target_dir / "requirements.txt"
     if req_path.exists():
-        await build_and_edit(event, [{"text": "`requirements.txt` найден, устанавливаю зависимости..."}])
+        await build_and_edit(event, [{"text": "<code>requirements.txt</code><b> найден, устанавливаю зависимости...</b>"}])
         pip_process = await asyncio.create_subprocess_shell(
             f"pip install -r {req_path}",
             stdout=asyncio.subprocess.PIPE,
@@ -94,7 +94,7 @@ async def _install_from_git_repo(event, url, force=False):
 
         if pip_process.returncode != 0:
             error_message = pip_stderr.decode().strip() or pip_stdout.decode().strip()
-            return await build_and_edit(event, [{"text": f"**⚠️ Ошибка при установке зависимостей:**\n`{error_message}`"}])
+            return await build_and_edit(event, [{"text": f"<b>⚠️ Ошибка при установке зависимостей:</b>\n<code>{error_message}</code>"}])
 
     found_modules = [p.stem for p in target_dir.rglob("*.py") if not p.name.startswith("_")]
     
@@ -110,7 +110,7 @@ async def _install_from_git_repo(event, url, force=False):
             {"text": f"{prefix}load {repo_name}.{found_modules[0]}", "entity": MessageEntityCode}
         ])
     else:
-        await build_and_edit(event, [{"text": f"⚠️ **Пакет `{repo_name}` установлен, но в нем не найдено исполняемых .py модулей.**"}])
+        await build_and_edit(event, [{"text": f"⚠️ <b>Пакет <code>{repo_name}</code> установлен, но в нем не найдено исполняемых .py модулей.</b>"}])
 
 async def process_and_install(event, file_name, content, source_url=None, force=False):
     """Общая логика для проверки и установки ОДИНОЧНОГО модуля."""
@@ -202,7 +202,7 @@ async def install_cmd(event, force=False):
     if not url.startswith("http"):
         return await build_and_edit(event, [
             {"text": "❌ "},
-            {"text": f"**Укажите полный URL. Использование: {prefix}install <url>**", "entity": MessageEntityBold}
+            {"text": f"<b>Укажите полный URL. Использование: {prefix}install <url></b>", "entity": MessageEntityBold}
         ])
 
     if url.endswith(".py"):
@@ -210,7 +210,7 @@ async def install_cmd(event, force=False):
     elif "github.com" in url:
         await _install_from_git_repo(event, url, force)
     else:
-        await build_and_edit(event, [{"text": "**Ссылка не распознана. Использование: .install <url>**"}])
+        await build_and_edit(event, [{"text": "<b>Ссылка не распознана. Использование: .install <url></b>"}])
 
 @register("forceinstall", incoming=True)
 async def force_install_cmd(event):
@@ -227,12 +227,12 @@ async def upload_module(event, force=False):
     message_with_file = reply if reply and reply.media else event.message
     
     if not message_with_file or not message_with_file.file:
-        return await build_and_edit(event, [{"text": "**Отправьте .py файл или ответьте на него командой.**"}])
+        return await build_and_edit(event, [{"text": "<b>Отправьте .py файл или ответьте на него командой.</b>"}])
 
     file_name = getattr(message_with_file.file, 'name', "module.py")
-    if not file_name.endswith(".py"): return await build_and_edit(event, [{"text": "**Файл должен быть .py**"}])
+    if not file_name.endswith(".py"): return await build_and_edit(event, [{"text": "<b>Файл должен быть .py</b>"}])
 
-    await build_and_edit(event, [{"text": "🔄 **Читаю файл...**"}])
+    await build_and_edit(event, [{"text": "🔄 <b>Читаю файл...</b>"}])
     
     content = (await message_with_file.download_media(bytes)).decode('utf-8', 'ignore')
     await process_and_install(event, file_name, content, force=force)
@@ -250,7 +250,7 @@ async def get_module_cmd(event):
 
     module_name = event.pattern_match.group(1)
     if not module_name:
-        return await build_and_edit(event, [{"text": "**Укажите имя модуля.**"}])
+        return await build_and_edit(event, [{"text": "<b>Укажите имя модуля.</b>"}])
 
     module_path = None
     potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))
@@ -258,9 +258,11 @@ async def get_module_cmd(event):
         module_path = potential_paths[0]
 
     if not module_path or not module_path.exists():
-        return await build_and_edit(event, [{"text": f"**❌ Модуль `{module_name}` не найден.**"}])
+        return await build_and_edit(event, [{"text": f"<b>❌ Модуль <code>{module_name}</code> не найден.</b>"}])
 
     prefix = db.get_setting("prefix", default=".")
+    
+    # ❗️❗️❗️ ИСПРАВЛЕНИЕ: Используем build_message, а не сырой HTML ❗️❗️❗️
     parts = [
         {"text": "📁", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": FOLDER_EMOJI_ID}},
         {"text": " Файл модуля ", "entity": MessageEntityBold},
@@ -277,10 +279,13 @@ async def get_module_cmd(event):
         event.chat_id,
         file=module_path,
         caption=caption,
-        formatting_entities=entities,
+        formatting_entities=entities, # <--- Передаем entities
         reply_to=event.id
+        # parse_mode="html" НЕ НУЖЕН, так как мы используем entities
     )
-    await event.delete()
+    
+    if event.out:
+        await event.delete()
 
 @register("remove", incoming=True)
 async def remove_module(event):
@@ -290,34 +295,31 @@ async def remove_module(event):
         
     name_to_remove = (event.pattern_match.group(1) or "").strip()
     if not name_to_remove:
-        return await build_and_edit(event, [{"text": "**Укажите имя модуля или пакета для удаления.**"}])
+        return await build_and_edit(event, [{"text": "<b>Укажите имя модуля или пакета для удаления.</b>"}])
 
-    # ❗️ ИСПРАВЛЕНИЕ: Ищем рекурсивно
     path_to_remove = MODULES_DIR / name_to_remove.replace(".", os.sep)
     if not path_to_remove.exists():
         path_to_remove = (MODULES_DIR / name_to_remove.replace(".", os.sep)).with_suffix(".py")
 
     if not path_to_remove.exists():
-        return await build_and_edit(event, [{"text": f"**❌ Ресурс `{name_to_remove}` не найден.**"}])
+        return await build_and_edit(event, [{"text": f"<b>❌ Ресурс <code>{name_to_remove}</code> не найден.</b>"}])
     
     try:
         if path_to_remove.is_dir():
             shutil.rmtree(path_to_remove)
-            # ❗️ ИСПРАВЛЕНИЕ: Очищаем БД для всех модулей внутри пакета
             all_modules = get_all_modules()
             for mod in all_modules:
                 if mod.startswith(name_to_remove + "."):
                     db.clear_module(mod)
         else:
             from utils.loader import unload_module
-            # ❗️ ИСПРАВЛЕНИЕ: Корректно получаем имя модуля для выгрузки
             module_name = ".".join(path_to_remove.relative_to(MODULES_DIR).with_suffix("").parts)
             if hasattr(event.client, 'modules') and module_name in event.client.modules:
                 await unload_module(event.client, module_name)
             path_to_remove.unlink()
             db.clear_module(module_name)
             
-        await build_and_edit(event, [{"text": f"✅ **Ресурс `{name_to_remove}` успешно удален!**"}])
+        await build_and_edit(event, [{"text": f"✅ <b>Ресурс <code>{name_to_remove}</code> успешно удален!</b>"}])
         
     except Exception as e:
-        await build_and_edit(event, [{"text": f"**❌ Ошибка при удалении:**\n`{traceback.format_exc()}`"}])
+        await build_and_edit(event, [{"text": f"<b>❌ Ошибка при удалении:</b>\n<code>{traceback.format_exc()}</code>"}])

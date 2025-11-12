@@ -1,6 +1,9 @@
 # modules/updater.py
-"""<manifest>
-version: 1.0.1
+"""
+Модуль для проверки и установки обновлений для других модулей через интерактивное меню.
+
+<manifest>
+version: 1.0.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/updater.py
 author: Kote
 
@@ -23,6 +26,8 @@ from utils.loader import reload_module
 from utils.security import check_permission
 from utils.message_builder import build_and_edit
 from telethon.tl.types import MessageEntityBold
+# ❗️❗️❗️ ДОБАВЛЕН ИМПОРТ ❗️❗️❗️
+from handlers.user_commands import _call_inline_bot
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 
@@ -76,23 +81,20 @@ async def check_for_updates():
             
     return updates_to_do
 
+# ❗️❗️❗️ БЛОК ИСПРАВЛЕНИЙ ❗️❗️❗️
 @register("check_updates", incoming=True)
 async def check_updates_cmd(event):
     """Запускает проверку обновлений через инлайн-меню."""
     if not check_permission(event, min_level="TRUSTED"):
         return
         
-    message = await event.respond("🔎 **Запрашиваю меню обновлений...**")
+    # Теперь мы используем тот же _call_inline_bot, что и .panel
+    # Это гарантирует, что сообщение будет удалено и отправлено корректно.
     try:
-        bot = event.client.bot_client
-        me = await bot.get_me()
-        results = await event.client.inline_query(me.username, "updates:check")
-        await results[0].click(event.chat_id)
-        await message.delete()
+        await _call_inline_bot(event, "updates:check")
     except Exception as e:
-        await message.edit(f"**❌ Не удалось вызвать меню обновлений.**\n\n"
-                           f"**Возможная причина:** ваш инлайн-бот выключен или не настроен.\n"
-                           f"**Ошибка:** `{e}`")
+        await event.respond(f"**❌ Не удалось вызвать меню обновлений.**\n"
+                            f"**Ошибка:** `{e}`")
 
 @register("update", incoming=True)
 async def update_cmd(event):
@@ -106,15 +108,15 @@ async def update_cmd(event):
     module_to_update = (event.pattern_match.group(1) or "").strip()
     if not module_to_update: return
     
-    # ❗️ ИЗМЕНЕНИЕ: Используем build_and_edit
-    message = await build_and_edit(event, [{"text": f"**Обновляю `{module_to_update}`...**"}])
+    # Мы не можем использовать build_and_edit, если сообщение НЕ .out
+    # Нам нужно ответить на .update, а не редактировать его.
+    message = await event.respond(f"**Обновляю `{module_to_update}`...**")
     
     updates = await check_for_updates()
     found = next((u for u in updates if u["module_name"] == module_to_update), None)
     
     if not found:
-        # ❗️ ИЗМЕНЕНИЕ: Используем build_and_edit
-        return await build_and_edit(event, [{"text": f"**ℹ️ Обновление для `{module_to_update}` не найдено.**"}])
+        return await message.edit(f"**ℹ️ Обновление для `{module_to_update}` не найдено.**")
         
     try:
         url_to_fetch = f"{found['source']}?t={int(time.time())}"
@@ -128,9 +130,7 @@ async def update_cmd(event):
         
         await reload_module(event.client, found["module_name"])
         
-        # ❗️ ИЗМЕНЕНИЕ: Используем build_and_edit
-        await build_and_edit(event, [{"text": f"✅ **Модуль `{found['module_name']}` обновлен до версии {found['new_version']}!**"}])
+        await message.edit(f"✅ **Модуль `{found['module_name']}` обновлен до версии {found['new_version']}!**")
         
     except Exception:
-        # ❗️ ИЗМЕНЕНИЕ: Используем build_and_edit
-        await build_and_edit(event, [{"text": f"**❌ Ошибка при обновлении `{module_to_update}`:**\n`{traceback.format_exc()}`"}])
+        await message.edit(f"**❌ Ошибка при обновлении `{module_to_update}`:**\n`{traceback.format_exc()}`")

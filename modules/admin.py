@@ -1,6 +1,6 @@
 # modules/admin.py
 """<manifest>
-version: 1.0.1
+version: 1.0.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 
@@ -11,19 +11,24 @@ author: Kote
 • untrust <id/ответ> - Удалить из доверенных
 • db_stats - Статистика БД
 • db_clear <модуль> - Очистить данные модуля
-• db_backup - Создать бэкап БД
+• db_backup - Отправить бэкап БД в чат
+• backup_modules - Архивировать и отправить все модули
 </manifest>"""
 
 import os
 import sys
 import shutil
+import zipfile
+import asyncio
 from pathlib import Path
 from datetime import datetime
-from core import register
+from core import register, inline_handler, callback_handler
 from utils import database as db
 from utils.message_builder import build_and_edit
 from utils.security import check_permission
+from handlers.user_commands import _call_inline_bot
 from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityCode, MessageEntityBold
+from telethon.tl.custom import Button
 
 # --- ПРЕМИУМ ЭМОДЗИ ---
 SUCCESS_EMOJI_ID = 5255813619702049821
@@ -34,10 +39,13 @@ WRENCH_EMOJI_ID = 5258023599419171861
 ERROR_EMOJI_ID = 5985346521103604145
 FOLDER_EMOJI_ID = 5877332341331857066
 CLOCK_EMOJI_ID = 5778605968208170641
+ZIP_EMOJI_ID = 5445284980978621387 
+WARN_EMOJI_ID = 4915853119839011973 # ⚠️ (Для рестарта)
+
+MODULES_DIR = Path(__file__).parent.parent / "modules"
 
 @register("prefix", incoming=True)
 async def set_prefix(event):
-    """Устанавливает или показывает префикс команд."""
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -63,25 +71,61 @@ async def set_prefix(event):
         {"text": f".\n\nЧтобы изменения вступили в силу, используйте команду {prefix}restart", "entity": MessageEntityCode}
     ])
 
+# ❗️❗️❗️ ИЗМЕНЕНИЕ: .restart ТЕПЕРЬ ВЫЗЫВАЕТ ИНЛАЙН-МЕНЮ ❗️❗️❗️
 @register("restart", incoming=True)
-async def restart_bot(event):
-    """Перезапускает юзербота с отчётом о статусе."""
+async def restart_confirmation(event):
+    """Показывает инлайн-меню для подтверждения перезагрузки."""
     if not check_permission(event, min_level="TRUSTED"):
+        return
+    
+    try:
+        await _call_inline_bot(event, "restart:confirm")
+    except Exception as e:
+        await event.respond(f"**❌ Не удалось вызвать меню перезагрузки.**\n"
+                            f"**Ошибка:** `{e}`")
+
+# ❗️❗️❗️ НОВЫЙ ОБРАБОТЧИК: Показывает кнопки ❗️❗️❗️
+@inline_handler(r"^restart:confirm$", title="🚀 Перезагрузка")
+async def restart_inline_handler(event):
+    """Генерирует инлайн-меню для .restart"""
+    text = "⚠️ <b>Вы уверены, что хотите перезагрузить KoteLoader?</b>"
+    buttons = [
+        [
+            Button.inline("🚀 Перезагрузить", data="do_restart"),
+            Button.inline("❌ Отмена", data="close_panel")
+        ]
+    ]
+    return text, buttons
+
+# ❗️❗️❗️ НОВЫЙ ОБРАБОТЧИК: Ловит нажатие кнопки "Перезагрузить" ❗️❗️❗️
+@callback_handler(r"^do_restart$")
+async def restart_callback_handler(event):
+    """Обрабатывает нажатие кнопки 'Перезагрузить'"""
+    await event.edit("🚀 <b>Перезапускаюсь...</b>", parse_mode="html")
+    
+    # Отправляем команду юзерботу, чтобы он выполнил реальную перезагрузку
+    prefix = db.get_setting("prefix", default=".")
+    await event.client.user_client.send_message("me", f"{prefix}real_restart")
+
+# ❗️❗️❗️ ИЗМЕНЕНИЕ: Старая команда .restart переименована в .real_restart ❗️❗️❗️
+@register("real_restart", incoming=True)
+async def real_restart_bot(event):
+    """Выполняет реальную перезагрузку (эта команда скрыта из .help)."""
+    # Доступна только самому себе (т.к. вызывается через send_message("me", ...))
+    if not event.out and event.sender_id != (await event.client.get_me()).id:
         return
     
     db.set_setting("restart_report_chat_id", str(event.chat_id))
     
-    await build_and_edit(event, [
-        {"text": "🚀", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ROCKET_EMOJI_ID}},
-        {"text": " Перезапускаюсь...", "entity": MessageEntityBold}
-    ])
+    # Не отвечаем, так как сообщение "Перезапускаюсь..." уже было
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
-@register("trust")
+
+@register("trust", incoming=True)
 async def trust_user(event):
-    """Добавляет пользователя в доверенные."""
-    # ❗️ ОСТАВЛЕНО: Только OWNER может назначать TRUSTED
     if not check_permission(event, min_level="OWNER"):
+        if db.get_user_level(event.sender_id) != "OWNER":
+            return
         return await build_and_edit(event, [
             {"text": "🚫 "}, 
             {"text": "Только владелец может использовать эту команду.", "entity": MessageEntityBold}
@@ -108,11 +152,11 @@ async def trust_user(event):
         {"text": " добавлен в доверенные."}
     ])
 
-@register("untrust")
+@register("untrust", incoming=True)
 async def untrust_user(event):
-    """Убирает пользователя из доверенных."""
-    # ❗️ ОСТАВЛЕНО: Только OWNER может забирать права
     if not check_permission(event, min_level="OWNER"):
+        if db.get_user_level(event.sender_id) != "OWNER":
+            return
         return await build_and_edit(event, [
             {"text": "🚫 "}, 
             {"text": "Только владелец может использовать эту команду.", "entity": MessageEntityBold}
@@ -147,7 +191,6 @@ async def untrust_user(event):
 
 @register("db_stats", incoming=True)
 async def show_db_stats(event):
-    """Показывает статистику использования БД модулями."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
@@ -196,7 +239,6 @@ async def show_db_stats(event):
 
 @register("db_clear", incoming=True)
 async def clear_module_data(event):
-    """Очищает все данные конкретного модуля из БД."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
@@ -204,7 +246,7 @@ async def clear_module_data(event):
     args = event.message.text.split(maxsplit=1)
     
     if len(args) < 2:
-        modules_with_data = list(set(db.find_modules_with_configs() + db.find_modules_with_data()))
+        modules_with_data = list(set(db.get_modules_with_configs() + db.get_modules_with_data()))
         
         parts = [
             {"text": "🗑", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": TRASH_EMOJI_ID}},
@@ -257,7 +299,6 @@ async def clear_module_data(event):
 
 @register("db_backup", incoming=True)
 async def backup_database(event):
-    """Создает резервную копию базы данных."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
@@ -270,29 +311,15 @@ async def backup_database(event):
                 {"text": " Файл базы данных не найден.", "entity": MessageEntityBold}
             ])
         
-        backup_dir = Path(__file__).parent.parent / "backups"
-        backup_dir.mkdir(exist_ok=True)
+        await event.client.send_file(
+            event.chat_id,
+            db_file,
+            caption=f"✅ <b>Резервная копия БД</b>\n<code>database.db</code>",
+            parse_mode="html"
+        )
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = backup_dir / f"database_backup_{timestamp}.db"
-        
-        shutil.copy2(db_file, backup_file)
-        
-        size_mb = round(backup_file.stat().st_size / 1024 / 1024, 2)
-        
-        await build_and_edit(event, [
-            {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
-            {"text": " Резервная копия БД создана!", "entity": MessageEntityBold},
-            {"text": "\n\n"},
-            {"text": "📁", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": FOLDER_EMOJI_ID}},
-            {"text": " Файл: "},
-            {"text": f"{backup_file.name}", "entity": MessageEntityCode},
-            {"text": "\n"},
-            {"text": "📊", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": CHART_EMOJI_ID}},
-            {"text": f" Размер: {size_mb} MB\n"},
-            {"text": "🕒", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": CLOCK_EMOJI_ID}},
-            {"text": f" Время: {timestamp[:8]} {timestamp[9:11]}:{timestamp[11:13]}:{timestamp[13:15]}"}
-        ])
+        if event.out:
+            await event.delete()
         
     except Exception as e:
         await build_and_edit(event, [
@@ -300,3 +327,46 @@ async def backup_database(event):
             {"text": " Ошибка создания бэкапа", "entity": MessageEntityBold},
             {"text": f":\n`{e}`"}
         ])
+
+@register("backup_modules", incoming=True)
+async def backup_modules_cmd(event):
+    if not check_permission(event, min_level="TRUSTED"):
+        return
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_filename = f"modules_backup_{timestamp}.zip"
+    
+    try:
+        await build_and_edit(event, [
+            {"text": "🗜️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ZIP_EMOJI_ID}},
+            {"text": " Начинаю архивацию модулей... Это может занять время.", "entity": MessageEntityBold}
+        ])
+
+        def create_zip():
+            """Синхронная функция для создания zip-архива"""
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file_path in MODULES_DIR.rglob("*"):
+                    if "__pycache__" in file_path.parts or ".git" in file_path.parts:
+                        continue
+                    zipf.write(file_path, file_path.relative_to(MODULES_DIR.parent))
+
+        await asyncio.to_thread(create_zip)
+
+        await event.client.send_file(
+            event.chat_id,
+            zip_filename,
+            caption=f"✅ <b>Резервная копия всех модулей</b>\n<code>{zip_filename}</code>",
+            parse_mode="html"
+        )
+        
+        await event.delete()
+
+    except Exception as e:
+        await build_and_edit(event, [
+            {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+            {"text": " Ошибка при архивации модулей", "entity": MessageEntityBold},
+            {"text": f":\n`{e}`"}
+        ])
+    finally:
+        if os.path.exists(zip_filename):
+            os.remove(zip_filename)

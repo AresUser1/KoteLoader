@@ -217,8 +217,6 @@ async def start_clients():
     panel_pattern = re.compile(f"^{re.escape(prefix)}(panel|settings)(?:\\s+(.*))?", re.IGNORECASE)
     user_client.add_event_handler(user_panel_helper, events.NewMessage(pattern=panel_pattern, outgoing=True))
     
-    # ----- БЛОК-ПЕРЕХВАТЧИК ДЛЯ module_inline_handler БЫЛ УДАЛЕН ОТСЮДА -----
-
     user_client.add_event_handler(all_messages_handler)
 
     if bot_client:
@@ -240,18 +238,23 @@ async def main():
         print("Не удалось запустить user-клиент. Выход.")
         return
         
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Запускаем воркер СНАЧАЛА ❗️❗️❗️
+    # Он загрузит модули ОДИН РАЗ
+    worker_task = asyncio.create_task(command_worker(user_client))
+    
+    # Даем воркеру секунду, чтобы он успел загрузить модули
+    # перед тем, как мы попытаемся отправить отчет о перезагрузке
+    await asyncio.sleep(1)
+
     report_chat_id_str = db.get_setting("restart_report_chat_id")
     if report_chat_id_str:
         try:
             report_chat_id = int(report_chat_id_str)
-            client = user_client
-            client.modules = {}
-            all_modules = loader.get_all_modules()
-            for module_name in all_modules:
-                # Убрали передачу chat_id, чтобы избежать отправки сообщений при старте
-                await loader.load_module(client, module_name)
             
-            loaded_modules_count = len(getattr(client, 'modules', {}))
+            # ❗️❗️❗️ ИЗМЕНЕНИЕ: Больше не загружаем модули здесь ❗️❗️❗️
+            # Просто читаем, сколько их загрузил воркер
+            loaded_modules_count = len(getattr(user_client, 'modules', {}))
+            
             ROCKET_EMOJI_ID = 5445284980978621387
             SUCCESS_EMOJI_ID = 5255813619702049821
             report_parts = [
@@ -271,7 +274,7 @@ async def main():
 
     try:
         tasks = [
-            command_worker(user_client),
+            worker_task, # Добавляем уже запущенный воркер
             user_client.run_until_disconnected()
         ]
         if bot_client:
