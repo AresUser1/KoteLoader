@@ -1,6 +1,6 @@
 # modules/git_manager.py
 """<manifest>
-version: 1.0.1
+version: 1.0.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/git_manager.py
 author: Kote
 
@@ -26,7 +26,7 @@ from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntit
 SUCCESS_EMOJI_ID = 5255813619702049821
 ERROR_EMOJI_ID = 5985346521103604145
 GIT_EMOJI_ID = 5968434789424832533
-KEY_EMOJI_ID = 5465415354988725287
+KEY_EMOJI_ID = 6005570495603282482
 ROCKET_EMOJI_ID = 5445284980978621387
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
