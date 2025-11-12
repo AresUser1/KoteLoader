@@ -4,7 +4,7 @@
 Этот модуль позволяет гибко настраивать отображаемую информацию.
 
 <manifest>
-version: 1.0.1
+version: 1.0.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/profile.py
 author: Kote
 
