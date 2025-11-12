@@ -476,7 +476,7 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
         parts.append({"text": "\n"}) 
 
     parts.append(_build_emoji_part(emojis['VERSION'], force_fallback))
-    parts.append({"text": " Версия: 1.0.0 ", "entity": MessageEntityBold})
+    parts.append({"text": " Версия: 1.0.1 ", "entity": MessageEntityBold})
     commit_url = git_info.get("commit_url")
     if commit_url:
         parts.append({"text": f"#{git_info['commit_sha']}", "entity": MessageEntityTextUrl, "kwargs": {"url": commit_url}})
