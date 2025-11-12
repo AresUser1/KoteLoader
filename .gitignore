@@ -1,0 +1,31 @@
+# --- Секреты ---
+# Файлы сессий Telethon (доступы к аккаунтам)
+*.session
+*.session-journal
+
+# Конфигурация (API ID / HASH, токен бота)
+config.ini
+
+# База данных (хранит GitHub токен, настройки, уровни доступа)
+database.db
+
+# --- Кэш и логи ---
+# Логи
+*.log
+logs.txt
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# Системные файлы
+.DS_Store
+
+# Файлы состояния и бэкапы
+state.json
+backups/
+modules_info.json
+command.json
+
+# Файлы бэкапов
+*.bak
