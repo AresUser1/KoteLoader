@@ -4,7 +4,7 @@
 Этот модуль позволяет гибко настраивать отображаемую информацию.
 
 <manifest>
-version: 1.0.3
+version: 1.0.4
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/profile.py
 author: Kote
 
@@ -30,6 +30,7 @@ author: Kote
 
 import time
 import platform
+import distro
 import json
 import os
 import re
@@ -111,37 +112,52 @@ def _build_emoji_part(emoji_details: dict, force_fallback: bool = False) -> dict
         part["kwargs"] = {"document_id": emoji_details['id']}
     return part
 
+def get_os_display_name():
+    try:
+        dist_name = distro.name(pretty=True)
+        if dist_name and dist_name.lower() != 'linux':
+            return dist_name
+        return distro.name(pretty=False)
+    except ImportError:
+        return platform.system()
+    except Exception:
+        return platform.system()
+
 def get_system_info() -> dict:
     process = psutil.Process(os.getpid())
     cpu_usage = process.cpu_percent()
     ram_usage = process.memory_info().rss / (1024 * 1024)
-    os_name = "Other"
     
+    os_name_display = get_os_display_name()
+    os_name_key = "Other"
+
     if os.environ.get("TERMUX_VERSION"):
-        os_name = "Termux"
+        os_name_key = "Termux"
     else:
         system = platform.system()
         if system == "Linux":
-            os_name = "Linux"
             hostname = platform.node().lower()
-            if "jam" in hostname: os_name = "JamHost"
+            if "jam" in hostname:
+                os_name_key = "JamHost"
             else:
                 try:
-                    release_info = platform.platform().lower()
-                    if "ubuntu" in release_info: os_name = "Ubuntu"
-                    elif "mint" in release_info: os_name = "Mint"
-                    elif "arch" in release_info: os_name = "Arch"
-                    elif "debian" in release_info: os_name = "Debian"
-                    elif "fedora" in release_info: os_name = "Fedora"
-                except Exception: pass 
-        elif system == "Windows": os_name = "Windows"
-        elif system == "Darwin": os_name = "macOS"
-        else: os_name = system if system else "Other"
+                    dist_id = distro.id().lower()
+                    if "ubuntu" in dist_id: os_name_key = "Ubuntu"
+                    elif "mint" in dist_id: os_name_key = "Mint"
+                    elif "arch" in dist_id: os_name_key = "Arch"
+                    elif "debian" in dist_id: os_name_key = "Debian"
+                    elif "fedora" in dist_id: os_name_key = "Fedora"
+                    else: os_name_key = "Linux"
+                except Exception:
+                    os_name_key = "Linux"
+        elif system == "Windows": os_name_key = "Windows"
+        elif system == "Darwin": os_name_key = "macOS"
+        else: os_name_key = system if system else "Other"
 
     os_emoji_mapping = _get_os_emoji_mapping()
-    os_emoji_details = os_emoji_mapping.get(os_name, os_emoji_mapping["Other"])
-    return {"cpu": cpu_usage, "ram": ram_usage, "os_name": os_name, "os_emoji": os_emoji_details}
-
+    os_emoji_details = os_emoji_mapping.get(os_name_key, os_emoji_mapping["Other"])
+    
+    return {"cpu": cpu_usage, "ram": ram_usage, "os_name": os_name_display, "os_emoji": os_emoji_details}
 
 @register("setbio", incoming=True)
 async def setbio_cmd(event):
@@ -431,8 +447,7 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
     git_info = get_git_info()
     sys_info = get_system_info() 
 
-    # ❗️❗️❗️ ВОТ ИЗМЕНЕНИЕ ❗️❗️❗️
-    # Динамически получаем версию из манифеста этого файла
+    
     try:
         current_file_path = Path(__file__)
         content = current_file_path.read_text(encoding='utf-8')
@@ -440,7 +455,7 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
         version = manifest.get("version", "N/A")
     except Exception:
         version = "N/A"
-    # ❗️❗️❗️ КОНЕЦ ИЗМЕНЕНИЯ ❗️❗️❗️
+    
 
     parts = [
         _build_emoji_part(emojis['PAW_1'], force_fallback),
@@ -489,7 +504,7 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
         parts.append({"text": "\n"}) 
 
     parts.append(_build_emoji_part(emojis['VERSION'], force_fallback))
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Используем динамическую версию ❗️❗️❗️
+    
     parts.append({"text": f" Версия: {version} ", "entity": MessageEntityBold})
     commit_url = git_info.get("commit_url")
     if commit_url:
