@@ -2,3 +2,4 @@ telethon
 aiohttp
 psutil
 gitpython
+distro
