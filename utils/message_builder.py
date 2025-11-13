@@ -1,9 +1,17 @@
 # utils/message_builder.py
 
-from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityCustomEmoji, MessageEntityItalic
+from telethon.tl.types import (
+    MessageEntityBold, 
+    MessageEntityCode, 
+    MessageEntityCustomEmoji, 
+    MessageEntityItalic,
+    MessageEntityBlockquote,
+    MessageEntityTextUrl
+)
 from telethon.errors.rpcerrorlist import MessageNotModifiedError
 from typing import Any, List, Tuple, Optional, Dict, Union
 from telethon.events import NewMessage
+from telethon.tl.custom.message import Message # Добавлен импорт для типизации
 
 def utf16len(s: str) -> int:
     """Вычисляет длину строки в UTF-16."""
@@ -19,7 +27,6 @@ def build_message(parts_list: List[Dict[str, Any]]) -> Tuple[str, List[Any]]:
     current_offset = 0
 
     for part in parts_list:
-        # ОШИБКА ПРОИСХОДИЛА ЗДЕСЬ, ЕСЛИ `part` БЫЛ СТРОКОЙ
         text = str(part.get("text", "")) 
         entity_type = part.get("entity")
         entity_kwargs = part.get("kwargs", {})
@@ -34,42 +41,45 @@ def build_message(parts_list: List[Dict[str, Any]]) -> Tuple[str, List[Any]]:
     return "".join(text_parts), entities
 
 async def build_and_edit(
-    event: NewMessage.Event, 
+    event: Union[NewMessage.Event, Message, None], # Расширена типизация
     message_parts: Union[str, List[Dict[str, Any]]], 
     parse_mode: Optional[str] = None, 
     link_preview: Optional[bool] = None, 
     formatting_entities: Optional[List[Any]] = None,
-    # ⭐ ИСПРАВЛЕНИЕ: Добавляем **kwargs, чтобы избежать NameError
     **kwargs 
-):
+) -> Optional[Message]: # Функция теперь явно возвращает Message или None
     """
     Универсальный сборщик и редактор/ответчик.
-    Обрабатывает как список частей, так и простую строку.
+    
+    ВАЖНОЕ ИСПРАВЛЕНИЕ: Функция теперь возвращает объект сообщения, чтобы избежать
+    ошибки 'NoneType' object has no attribute 'out'.
     """
+    
+    # 1. Защита от NoneType
+    if event is None:
+        print("[MessageBuilder] Предупреждение: event был None. Отправка/редактирование пропущено.")
+        return None
+        
     final_text: str
     entities: Optional[List[Any]] = formatting_entities
 
-    # Обрабатываем случай, когда передана простая строка
+    # 2. Обработка частей сообщения
     if isinstance(message_parts, str):
         final_text = message_parts
     elif isinstance(message_parts, list):
-        # Если это список частей, используем основную функцию build_message
         try:
-            # Замените 'build_message' на фактическое имя вашей функции, если оно отличается
             final_text, entities = build_message(message_parts)
-        except Exception:
-            final_text = "Ошибка при сборке сообщения."
+        except Exception as e:
+            final_text = f"❌ Ошибка сборки сообщения: {type(e).__name__}"
             entities = None
     else:
         final_text = str(message_parts)
 
-
-    # Автоматически устанавливаем parse_mode, если нет entities
+    # 3. Настройка параметров отправки
     if not entities and parse_mode is None:
         if final_text:
             parse_mode = "md" 
 
-    # ❗ ЭТО ТЕПЕРЬ РАБОТАЕТ, Т.К. **kwargs ОПРЕДЕЛЕНЫ
     kwargs.pop('parse_mode', None)
     
     send_kwargs = {
@@ -81,23 +91,31 @@ async def build_and_edit(
     
     send_kwargs = {k: v for k, v in send_kwargs.items() if v is not None}
     
+    # 4. Отправка/Редактирование с возвратом объекта
     try:
         if event.out:
-            await event.edit(final_text, **send_kwargs)
+            edited_message = await event.edit(final_text, **send_kwargs)
+            return edited_message # <-- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Возвращаем отредактированное сообщение
         else:
-            await event.respond(final_text, **send_kwargs)
+            sent_message = await event.respond(final_text, **send_kwargs)
+            return sent_message # <-- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Возвращаем отправленное сообщение
     except MessageNotModifiedError:
-        pass
+        return event # Если не изменено, возвращаем объект для дальнейшего использования
     except Exception as e:
-        if event.out:
+        # Логирование ошибки (только для информации)
+        print(f"[MessageBuilder] Ошибка отправки/редактирования: {type(e).__name__} (caused by {type(event).__name__})")
+        
+        # Обработка ошибки при редактировании исходящего сообщения
+        if getattr(event, 'out', False):
             try:
+                # В случае ошибки редактирования, отправляем новое сообщение
                 await event.client.send_message(
-                    event.chat_id, 
+                    getattr(event, 'chat_id', None), 
                     f"❌ Ошибка редактирования: `{type(e).__name__}`\n\n{final_text}", 
-                    reply_to=event.id,
+                    reply_to=getattr(event, 'id', None),
                     **send_kwargs
                 )
             except Exception:
                 pass
-        else:
-            pass
+        
+        return None # <-- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: При ошибке возвращаем None
