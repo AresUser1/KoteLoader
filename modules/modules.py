@@ -2,7 +2,7 @@
 """Управление модулями: загрузка, выгрузка, перезагрузка и просмотр информации.
 
 <manifest>
-version: 1.0.1
+version: 1.0.6
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/modules.py
 author: Kote
 
@@ -21,6 +21,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+import re
 from core import register
 from utils import database as db
 from services.module_info_cache import parse_manifest
@@ -68,6 +69,11 @@ def _build_emoji_part(emoji_details: dict) -> dict:
         part["kwargs"] = {"document_id": emoji_details['id']}
     return part
 
+def get_static_mod_emoji_data(key: str) -> dict:
+    """Извлекает данные эмодзи (ID и fallback) по ключу. Использовалась в командах ниже."""
+    all_emojis = _get_static_emojis()
+    return all_emojis.get(key.upper(), {"id": 0, "fallback": "?"})
+
 async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
     """Парсер аргументов для команд .setmodemoji"""
     prefix = db.get_setting('prefix', '.')
@@ -97,7 +103,18 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
     
     if event.entities:
         for entity in event.entities:
-            if isinstance(entity, MessageEntityCustomEmoji) and entity.offset >= (len(prefix) + len(cmd_name) + len(key)):
+            # Смещение должно начинаться после префикса, команды и ключа
+            try:
+                # Находим начало аргументов
+                args_start_index = event.text.find(args_str)
+                # Вычисляем минимальное смещение для эмодзи:
+                # (префикс + команда + пробел) + (ключ + пробел)
+                min_emoji_offset = event.text.find(key) + len(key)
+            except:
+                # Запасной вариант, если не удалось найти
+                min_emoji_offset = len(prefix) + len(cmd_name) + len(key) + 2 
+
+            if isinstance(entity, MessageEntityCustomEmoji) and entity.offset >= min_emoji_offset:
                 emoji_id = entity.document_id
                 if fallback_char == "❔":
                     try:
@@ -117,7 +134,10 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
         return {"error": [{"text": "❌ Укажите ID или Премиум-Эмодзи"}]}
     
     if fallback_char == "❔" and emoji_id != 0:
-         return {"error": [{"text": "❌ Укажите fallback-символ после |"}]}
+         # Ищем fallback в первом символе (обычно это сам эмодзи, если он был введен)
+         fallback_char = args_before_pipe.split(maxsplit=2)[-1][0] if len(args_before_pipe.split()) > 1 else '✨'
+         if fallback_char == "❔" or fallback_char.isdigit():
+             return {"error": [{"text": "❌ Укажите fallback-символ после |"}]}
             
     return {"key": key, "id": emoji_id, "fallback": fallback_char}
 
@@ -378,11 +398,58 @@ async def load_cmd(event):
             {"text": f"Использование: {prefix}load <module>", "entity": MessageEntityCode}
         ])
     
-    await build_and_edit(event, [{"text": f"⏳ <b>Загружаю модуль <code>{module_name}</code>...</b>"}])
+    # Использование эмодзи через функцию
+    EMOJI_ROCKET = _build_emoji_part(get_static_mod_emoji_data("ROCKET"))
+    text, entities = build_message([
+        EMOJI_ROCKET,
+        {"text": " <b>Загружаю модуль ", "entity": MessageEntityBold},
+        {"text": module_name, "entity": MessageEntityCode},
+        {"text": "...</b>", "entity": MessageEntityBold}
+    ])
+    await build_and_edit(event, text, formatting_entities=entities)
+    
     result = await load_module(event.client, module_name, event.chat_id)
     update_state_file(event.client)
+    
+    # --- УСИЛЕННОЕ ИСПРАВЛЕНИЕ СЫРОГО ФОРМАТИРОВАНИЯ (1.0.5) ---
     if result:
-        await build_and_edit(event, [{"text": result}])
+        EMOJI_SUCCESS = _build_emoji_part(get_static_mod_emoji_data("SUCCESS"))
+        EMOJI_ERROR = _build_emoji_part(get_static_mod_emoji_data("ERROR"))
+
+        parts = []
+        
+        # 1. Агрессивная очистка строки результата от всех тегов, разметки и стандартных эмодзи
+        result_clean = re.sub(r'<[^>]+>|\*\*|_|`|\U00002705|\U0000274C', '', result).strip() 
+        result_lower = result_clean.lower()
+        
+        # 2. Определение статуса и добавление кастомного эмодзи
+        if "успешно загружен" in result_lower:
+            parts.append(EMOJI_SUCCESS)
+            
+            # 3. Структурированное восстановление текста
+            match = re.search(r'Модуль\s+(.*?)\s+(успешно загружен)\.', result_clean)
+            if match:
+                mod_name = match.group(1).strip()
+                action_text = match.group(2).strip()
+                parts.extend([
+                    {"text": " Модуль "},
+                    {"text": mod_name, "entity": MessageEntityBold},
+                    {"text": " " + action_text + "."}
+                ])
+            else:
+                 # Если парсинг не удался (нестандартный ответ), выводим очищенный текст целиком
+                parts.append({"text": " " + result_clean} if result_clean else {"text": " Успешно."})
+            
+        elif "ошибка" in result_lower or "не найден" in result_lower or "не удалось" in result_lower:
+            parts.append(EMOJI_ERROR)
+            parts.append({"text": " " + result_clean})
+        else:
+             # Неожиданный успешный результат, просто используем успешный эмодзи и текст
+            parts.append(EMOJI_SUCCESS) 
+            parts.append({"text": " " + result_clean})
+            
+        await build_and_edit(event, parts, link_preview=False)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
 @register("unload", incoming=True)
 async def unload_cmd(event):
@@ -399,10 +466,58 @@ async def unload_cmd(event):
             {"text": f"Использование: {prefix}unload <module>", "entity": MessageEntityCode}
         ])
 
-    await build_and_edit(event, [{"text": f"🗑️ <b>Выгружаю модуль <code>{module_name}</code>...</b>"}])
+    # Использование эмодзи через функцию
+    EMOJI_DB = _build_emoji_part(get_static_mod_emoji_data("DB"))
+    text, entities = build_message([
+        EMOJI_DB,
+        {"text": " <b>Выгружаю модуль ", "entity": MessageEntityBold},
+        {"text": module_name, "entity": MessageEntityCode},
+        {"text": "...</b>", "entity": MessageEntityBold}
+    ])
+    await build_and_edit(event, text, formatting_entities=entities)
+    
     result = await unload_module(event.client, module_name)
     update_state_file(event.client)
-    await build_and_edit(event, [{"text": result}])
+    
+    # --- УСИЛЕННОЕ ИСПРАВЛЕНИЕ СЫРОГО ФОРМАТИРОВАНИЯ (1.0.5) ---
+    if result:
+        EMOJI_SUCCESS = _build_emoji_part(get_static_mod_emoji_data("SUCCESS"))
+        EMOJI_ERROR = _build_emoji_part(get_static_mod_emoji_data("ERROR"))
+
+        parts = []
+        
+        # 1. Агрессивная очистка строки результата от всех тегов, разметки и стандартных эмодзи
+        result_clean = re.sub(r'<[^>]+>|\*\*|_|`|\U00002705|\U0000274C', '', result).strip() 
+        result_lower = result_clean.lower()
+        
+        # 2. Определение статуса и добавление кастомного эмодзи
+        if "успешно выгружен" in result_lower:
+            parts.append(EMOJI_SUCCESS)
+            
+            # 3. Структурированное восстановление текста
+            match = re.search(r'Модуль\s+(.*?)\s+(успешно выгружен)\.', result_clean)
+            if match:
+                mod_name = match.group(1).strip()
+                action_text = match.group(2).strip()
+                parts.extend([
+                    {"text": " Модуль "},
+                    {"text": mod_name, "entity": MessageEntityBold},
+                    {"text": " " + action_text + "."}
+                ])
+            else:
+                 # Если парсинг не удался (нестандартный ответ), выводим очищенный текст целиком
+                parts.append({"text": " " + result_clean} if result_clean else {"text": " Успешно."})
+            
+        elif "ошибка" in result_lower or "не найден" in result_lower or "не удалось" in result_lower:
+            parts.append(EMOJI_ERROR)
+            parts.append({"text": " " + result_clean})
+        else:
+             # Неожиданный успешный результат, просто используем успешный эмодзи и текст
+            parts.append(EMOJI_SUCCESS) 
+            parts.append({"text": " " + result_clean})
+            
+        await build_and_edit(event, parts, link_preview=False)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
 @register("reload", incoming=True)
 async def reload_cmd(event):
@@ -419,11 +534,58 @@ async def reload_cmd(event):
             {"text": f"Использование: {prefix}reload <module>", "entity": MessageEntityCode}
         ])
 
-    await build_and_edit(event, [{"text": f"♻️ <b>Перезагружаю модуль <code>{module_name}</code>...</b>"}])
+    # Использование эмодзи через функцию
+    EMOJI_UPDATE = _build_emoji_part(get_static_mod_emoji_data("UPDATE"))
+    text, entities = build_message([
+        EMOJI_UPDATE,
+        {"text": " <b>Перезагружаю модуль ", "entity": MessageEntityBold},
+        {"text": module_name, "entity": MessageEntityCode},
+        {"text": "...</b>", "entity": MessageEntityBold}
+    ])
+    await build_and_edit(event, text, formatting_entities=entities)
+    
     result = await reload_module(event.client, module_name, event.chat_id)
     update_state_file(event.client)
+    
+    # --- УСИЛЕННОЕ ИСПРАВЛЕНИЕ СЫРОГО ФОРМАТИРОВАНИЯ (1.0.5) ---
     if result:
-        await build_and_edit(event, [{"text": result}])
+        EMOJI_SUCCESS = _build_emoji_part(get_static_mod_emoji_data("SUCCESS"))
+        EMOJI_ERROR = _build_emoji_part(get_static_mod_emoji_data("ERROR"))
+
+        parts = []
+        
+        # 1. Агрессивная очистка строки результата от всех тегов, разметки и стандартных эмодзи
+        result_clean = re.sub(r'<[^>]+>|\*\*|_|`|\U00002705|\U0000274C', '', result).strip() 
+        result_lower = result_clean.lower()
+        
+        # 2. Определение статуса и добавление кастомного эмодзи
+        if "успешно перезагружен" in result_lower:
+            parts.append(EMOJI_SUCCESS)
+            
+            # 3. Структурированное восстановление текста
+            match = re.search(r'Модуль\s+(.*?)\s+(успешно перезагружен)\.', result_clean)
+            if match:
+                mod_name = match.group(1).strip()
+                action_text = match.group(2).strip()
+                parts.extend([
+                    {"text": " Модуль "},
+                    {"text": mod_name, "entity": MessageEntityBold},
+                    {"text": " " + action_text + "."}
+                ])
+            else:
+                 # Если парсинг не удался (нестандартный ответ), выводим очищенный текст целиком
+                parts.append({"text": " " + result_clean} if result_clean else {"text": " Успешно."})
+            
+        elif "ошибка" in result_lower or "не найден" in result_lower or "не удалось" in result_lower:
+            parts.append(EMOJI_ERROR)
+            parts.append({"text": " " + result_clean})
+        else:
+             # Неожиданный успешный результат, просто используем успешный эмодзи и текст
+            parts.append(EMOJI_SUCCESS) 
+            parts.append({"text": " " + result_clean})
+            
+        await build_and_edit(event, parts, link_preview=False)
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
 def get_module_size(module_name):
     potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))

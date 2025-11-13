@@ -1,18 +1,19 @@
 # modules/admin.py
 """<manifest>
-version: 1.0.3
+version: 1.0.4
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 
 Команды:
-• prefix [префикс] - Показать/изменить префикс
-• restart - Перезапустить юзербота
-• trust <id/ответ> - Добавить в доверенные
-• untrust <id/ответ> - Удалить из доверенных
-• db_stats - Статистика БД
-• db_clear <модуль> - Очистить данные модуля
-• db_backup - Отправить бэкап БД в чат
-• backup_modules - Архивировать и отправить все модули
+• prefix [префикс] - Показать или изменить префикс юзербота.
+• restart - Показывает инлайн-меню для подтверждения и запуска перезагрузки.
+• real_restart - Выполняет реальную перезагрузку (эта команда скрыта и вызывается автоматически).
+• trust <id/ответ> - Добавить пользователя в список доверенных лиц.
+• untrust <id/ответ> - Удалить пользователя из списка доверенных лиц.
+• db_stats - Показать статистику использования базы данных по модулям.
+• db_clear <модуль> - Очистить все данные (настройки и записи) указанного модуля.
+• db_backup - Создать и отправить файл бэкапа базы данных в чат.
+• backup_modules - Создать ZIP-архив всех модулей и отправить его в чат.
 </manifest>"""
 
 import os
@@ -46,6 +47,7 @@ MODULES_DIR = Path(__file__).parent.parent / "modules"
 
 @register("prefix", incoming=True)
 async def set_prefix(event):
+    """Показать или изменить префикс юзербота."""
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -110,7 +112,7 @@ async def restart_callback_handler(event):
 # ❗️❗️❗️ ИЗМЕНЕНИЕ: Старая команда .restart переименована в .real_restart ❗️❗️❗️
 @register("real_restart", incoming=True)
 async def real_restart_bot(event):
-    """Выполняет реальную перезагрузку (эта команда скрыта из .help)."""
+    """Выполняет реальную перезагрузку (эта команда скрыта)."""
     # Доступна только самому себе (т.к. вызывается через send_message("me", ...))
     if not event.out and event.sender_id != (await event.client.get_me()).id:
         return
@@ -123,6 +125,7 @@ async def real_restart_bot(event):
 
 @register("trust", incoming=True)
 async def trust_user(event):
+    """Добавить пользователя в список доверенных лиц."""
     if not check_permission(event, min_level="OWNER"):
         if db.get_user_level(event.sender_id) != "OWNER":
             return
@@ -154,6 +157,7 @@ async def trust_user(event):
 
 @register("untrust", incoming=True)
 async def untrust_user(event):
+    """Удалить пользователя из списка доверенных лиц."""
     if not check_permission(event, min_level="OWNER"):
         if db.get_user_level(event.sender_id) != "OWNER":
             return
@@ -191,6 +195,7 @@ async def untrust_user(event):
 
 @register("db_stats", incoming=True)
 async def show_db_stats(event):
+    """Показать статистику использования базы данных по модулям."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
@@ -239,6 +244,7 @@ async def show_db_stats(event):
 
 @register("db_clear", incoming=True)
 async def clear_module_data(event):
+    """Очистить все данные (настройки и записи) указанного модуля."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
@@ -258,7 +264,7 @@ async def clear_module_data(event):
         else:
             parts.append({"text": "Доступные модули для очистки:\n", "entity": MessageEntityBold})
             for module in sorted(modules_with_data):
-                parts.append({"text": f"• "})
+                parts.append({"text": "• "})
                 parts.append({"text": f"{module}", "entity": MessageEntityCode})
                 parts.append({"text": "\n"})
             parts.append({"text": "\nИспользование: ", "entity": MessageEntityBold})
@@ -299,6 +305,7 @@ async def clear_module_data(event):
 
 @register("db_backup", incoming=True)
 async def backup_database(event):
+    """Создать и отправить файл бэкапа базы данных в чат."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
@@ -330,6 +337,7 @@ async def backup_database(event):
 
 @register("backup_modules", incoming=True)
 async def backup_modules_cmd(event):
+    """Создать ZIP-архив всех модулей и отправить его в чат."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
