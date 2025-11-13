@@ -4,7 +4,7 @@
 Этот модуль позволяет гибко настраивать отображаемую информацию.
 
 <manifest>
-version: 1.0.4
+version: 1.0.5
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/profile.py
 author: Kote
 
@@ -475,12 +475,11 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
         if force_fallback:
              bio_entities_raw = [e for e in bio_entities_raw if e.get("_") != "MessageEntityCustomEmoji"]
         bio_entities = _reconstruct_entities(bio_entities_raw)
+        
         parts.append(_build_emoji_part(emojis['BIO'], force_fallback))
         parts.append({"text": " Био: \n", "entity": MessageEntityBold})
-        parts.append({
-            "text": bio_text,
-            "entities": [MessageEntityBlockquote(offset=0, length=len(bio_text.encode('utf-16-le')) // 2)] + bio_entities
-        })
+        # Просто используем entities как есть, без изменений
+        parts.append({"text": bio_text, "entities": bio_entities if bio_entities else None})
         parts.append({"text": "\n"})
     
     parts.append({"text": "\n"}) 
@@ -493,13 +492,12 @@ async def _build_info_parts(client, force_fallback: bool = False) -> list:
             if force_fallback:
                 field_entities_raw = [e for e in field_entities_raw if e.get("_") != "MessageEntityCustomEmoji"]
             field_entities = _reconstruct_entities(field_entities_raw)
+            
             parts.extend([
                 {"text": f"{name}: ", "entity": MessageEntityBold},
             ])
-            parts.append({
-                "text": field_text,
-                "entities": [MessageEntityBlockquote(offset=0, length=len(field_text.encode('utf-16-le')) // 2)] + field_entities
-            })
+            # Просто используем entities как есть, без изменений
+            parts.append({"text": field_text, "entities": field_entities if field_entities else None})
             parts.append({"text": "\n"})
         parts.append({"text": "\n"}) 
 
@@ -724,73 +722,138 @@ async def profile_cmd(event):
         text = original_text
 
         if contains_text_ph or contains_emoji_ph:
+            # Создаем карту: какие символы в каких entities находятся
+            # Формат: {char_index_utf16: [list of entities]}
+            char_entity_map = {}
+            for entity in entities:
+                for i in range(entity.offset, entity.offset + entity.length):
+                    if i not in char_entity_map:
+                        char_entity_map[i] = []
+                    char_entity_map[i].append(entity)
             
-            replacements_positions = []
-            
-            for placeholder, value in text_replacements.items():
-                pos = 0
-                while True:
-                    pos = text.find(placeholder, pos)
-                    if pos == -1: break
-                    replacements_positions.append((pos, placeholder, value))
-                    pos += len(placeholder)
-            
-            for placeholder, details in emoji_replacements.items():
-                pos = 0
-                while True:
-                    pos = text.find(placeholder, pos)
-                    if pos == -1: break
-                    replacements_positions.append((pos, placeholder, details)) 
-                    pos += len(placeholder)
-            
-            replacements_positions.sort(key=lambda x: x[0])
-            
+            # Применяем замены и строим новый текст с отслеживанием позиций
             new_text = ""
-            last_pos = 0
+            new_entities = []
+            entity_tracking = {}  # {old_entity_id: {'start': new_start, 'end': new_end}}
             
-            for pos, placeholder, replacement_data in replacements_positions:
-                is_emoji_replacement = isinstance(replacement_data, dict)
+            i = 0  # позиция в оригинальном тексте (строка Python)
+            while i < len(text):
+                # Проверяем, начинается ли здесь плейсхолдер
+                replaced = False
                 
-                if is_emoji_replacement:
-                    value = replacement_data['fallback']
-                    details = replacement_data
-                else:
-                    value = replacement_data
-                    details = None
-
-                new_text += text[last_pos:pos]
+                # Проверяем текстовые плейсхолдеры
+                for placeholder, value in text_replacements.items():
+                    if text[i:i+len(placeholder)] == placeholder:
+                        # Получаем UTF-16 позицию ДО добавления
+                        utf16_pos_before = len(new_text.encode('utf-16-le')) // 2
+                        
+                        # Добавляем замену
+                        new_text += value
+                        
+                        # Запоминаем, какие entities были в этом диапазоне
+                        old_utf16_pos = len(text[:i].encode('utf-16-le')) // 2
+                        old_utf16_end = len(text[:i+len(placeholder)].encode('utf-16-le')) // 2
+                        
+                        # Переносим entities, которые покрывали плейсхолдер
+                        for entity in entities:
+                            if entity.offset <= old_utf16_pos < entity.offset + entity.length:
+                                entity_id = id(entity)
+                                if entity_id not in entity_tracking:
+                                    entity_tracking[entity_id] = {'start': utf16_pos_before, 'end': len(new_text.encode('utf-16-le')) // 2, 'entity': entity}
+                                else:
+                                    entity_tracking[entity_id]['end'] = len(new_text.encode('utf-16-le')) // 2
+                        
+                        i += len(placeholder)
+                        replaced = True
+                        break
                 
-                old_len_utf16 = len(placeholder.encode('utf-16-le')) // 2
-                new_len_utf16 = len(value.encode('utf-16-le')) // 2
-                shift = new_len_utf16 - old_len_utf16
+                # Проверяем эмодзи плейсхолдеры
+                if not replaced:
+                    for placeholder, details in emoji_replacements.items():
+                        if text[i:i+len(placeholder)] == placeholder:
+                            utf16_pos_before = len(new_text.encode('utf-16-le')) // 2
+                            value = details['fallback']
+                            new_text += value
+                            
+                            # Добавляем CustomEmoji если есть ID
+                            if details.get('id', 0) != 0:
+                                new_len_utf16 = len(value.encode('utf-16-le')) // 2
+                                new_entities.append(
+                                    MessageEntityCustomEmoji(
+                                        offset=utf16_pos_before,
+                                        length=new_len_utf16,
+                                        document_id=details['id']
+                                    )
+                                )
+                            
+                            # Переносим entities
+                            old_utf16_pos = len(text[:i].encode('utf-16-le')) // 2
+                            for entity in entities:
+                                if entity.offset <= old_utf16_pos < entity.offset + entity.length:
+                                    entity_id = id(entity)
+                                    if entity_id not in entity_tracking:
+                                        entity_tracking[entity_id] = {'start': utf16_pos_before, 'end': len(new_text.encode('utf-16-le')) // 2, 'entity': entity}
+                                    else:
+                                        entity_tracking[entity_id]['end'] = len(new_text.encode('utf-16-le')) // 2
+                            
+                            i += len(placeholder)
+                            replaced = True
+                            break
                 
-                current_pos_utf16 = len(new_text.encode('utf-16-le')) // 2
-                
-                for entity in entities:
-                    entity_start = entity.offset
-                    entity_end = entity.offset + entity.length
-                    is_fixed_length = isinstance(entity, (MessageEntityCustomEmoji, MessageEntityTextUrl))
+                # Если не заменили, просто копируем символ
+                if not replaced:
+                    utf16_pos_before = len(new_text.encode('utf-16-le')) // 2
+                    new_text += text[i]
                     
-                    if entity_start >= current_pos_utf16 + old_len_utf16:
-                        entity.offset += shift
-                    elif entity_start <= current_pos_utf16 < entity_end:
-                        if not is_fixed_length:
-                            entity.length += shift
-                
-                if is_emoji_replacement and details.get('id', 0) != 0:
-                    entities.append(
-                        MessageEntityCustomEmoji(
-                            offset=current_pos_utf16, 
-                            length=new_len_utf16, 
-                            document_id=details['id']
-                        )
-                    )
-
-                new_text += value
-                last_pos = pos + len(placeholder)
+                    # Переносим entities для этого символа
+                    old_utf16_pos = len(text[:i].encode('utf-16-le')) // 2
+                    for entity in entities:
+                        if entity.offset <= old_utf16_pos < entity.offset + entity.length:
+                            entity_id = id(entity)
+                            if entity_id not in entity_tracking:
+                                entity_tracking[entity_id] = {'start': utf16_pos_before, 'end': len(new_text.encode('utf-16-le')) // 2, 'entity': entity}
+                            else:
+                                entity_tracking[entity_id]['end'] = len(new_text.encode('utf-16-le')) // 2
+                    
+                    i += 1
             
-            new_text += text[last_pos:]
+            # Создаем новые entities на основе tracking
+            for tracked in entity_tracking.values():
+                old_entity = tracked['entity']
+                new_length = tracked['end'] - tracked['start']
+                
+                if new_length > 0:  # Только если entity не пустая
+                    if isinstance(old_entity, MessageEntityBlockquote):
+                        new_entities.append(MessageEntityBlockquote(offset=tracked['start'], length=new_length))
+                    elif isinstance(old_entity, MessageEntityBold):
+                        new_entities.append(MessageEntityBold(offset=tracked['start'], length=new_length))
+                    elif isinstance(old_entity, MessageEntityItalic):
+                        new_entities.append(MessageEntityItalic(offset=tracked['start'], length=new_length))
+                    elif isinstance(old_entity, MessageEntityCode):
+                        new_entities.append(MessageEntityCode(offset=tracked['start'], length=new_length))
+                    elif isinstance(old_entity, MessageEntityUnderline):
+                        new_entities.append(MessageEntityUnderline(offset=tracked['start'], length=new_length))
+                    elif isinstance(old_entity, MessageEntityStrike):
+                        new_entities.append(MessageEntityStrike(offset=tracked['start'], length=new_length))
+                    elif isinstance(old_entity, MessageEntityTextUrl):
+                        new_entities.append(MessageEntityTextUrl(offset=tracked['start'], length=new_length, url=old_entity.url))
+                    elif isinstance(old_entity, MessageEntityCustomEmoji):
+                        new_entities.append(MessageEntityCustomEmoji(offset=tracked['start'], length=new_length, document_id=old_entity.document_id))
+            
             text = new_text
+            entities = new_entities
+        
+        # Добавляем blockquote для всего текста ТОЛЬКО если его ещё нет
+        has_blockquote = any(isinstance(e, MessageEntityBlockquote) for e in entities)
+        
+        if not has_blockquote:
+            text_len_utf16 = len(text.encode('utf-16-le')) // 2
+            blockquote_entity = MessageEntityBlockquote(offset=0, length=text_len_utf16)
+            
+            if entities:
+                entities.insert(0, blockquote_entity)
+            else:
+                entities = [blockquote_entity]
         
         media_pointer_str = db.get_setting("profile_media")
         media = None
@@ -809,12 +872,14 @@ async def profile_cmd(event):
                     event.chat_id,
                     media,
                     caption=text,
-                    formatting_entities=entities or None,
+                    formatting_entities=entities,
                     link_preview=False
                 )
                 await event.delete()
             else:
-                await build_and_edit(event, [{"text": text}], formatting_entities=entities, link_preview=False)
+                # Используем build_and_edit с entities напрямую
+                # Это должно правильно обработать все entities
+                await event.edit(text, formatting_entities=entities, link_preview=False)
         except Exception as e:
             fallback_text = f"⚠️ Ошибка рендера:\n`{type(e).__name__}`\n\n{text}"
             if media:
