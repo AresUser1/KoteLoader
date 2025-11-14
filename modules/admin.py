@@ -1,13 +1,12 @@
 # modules/admin.py
 """<manifest>
-version: 1.0.4
+version: 1.0.5
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 
 Команды:
 • prefix [префикс] - Показать или изменить префикс юзербота.
-• restart - Показывает инлайн-меню для подтверждения и запуска перезагрузки.
-• real_restart - Выполняет реальную перезагрузку (эта команда скрыта и вызывается автоматически).
+• restart - Мгновенная перезагрузка юзербота.
 • trust <id/ответ> - Добавить пользователя в список доверенных лиц.
 • untrust <id/ответ> - Удалить пользователя из списка доверенных лиц.
 • db_stats - Показать статистику использования базы данных по модулям.
@@ -21,6 +20,7 @@ import sys
 import shutil
 import zipfile
 import asyncio
+import time # ❗️❗️❗️ ИЗМЕНЕНИЕ: Добавлен time
 from pathlib import Path
 from datetime import datetime
 from core import register, inline_handler, callback_handler
@@ -41,7 +41,7 @@ ERROR_EMOJI_ID = 5985346521103604145
 FOLDER_EMOJI_ID = 5877332341331857066
 CLOCK_EMOJI_ID = 5778605968208170641
 ZIP_EMOJI_ID = 5445284980978621387 
-WARN_EMOJI_ID = 4915853119839011973 # ⚠️ (Для рестарта)
+WARN_EMOJI_ID = 4915853119839011973 # ⚠️
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 
@@ -73,54 +73,30 @@ async def set_prefix(event):
         {"text": f".\n\nЧтобы изменения вступили в силу, используйте команду {prefix}restart", "entity": MessageEntityCode}
     ])
 
-# ❗️❗️❗️ ИЗМЕНЕНИЕ: .restart ТЕПЕРЬ ВЫЗЫВАЕТ ИНЛАЙН-МЕНЮ ❗️❗️❗️
+# ❗️❗️❗️ ИЗМЕНЕНИЕ: .restart ТЕПЕРЬ СРАЗУ ПЕРЕЗАГРУЖАЕТ ❗️❗️❗️
 @register("restart", incoming=True)
-async def restart_confirmation(event):
-    """Показывает инлайн-меню для подтверждения перезагрузки."""
+async def restart_bot(event):
+    """Выполняет реальную перезагрузку."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Сразу отвечаем, что перезапускаемся ❗️❗️❗️
     try:
-        await _call_inline_bot(event, "restart:confirm")
+        await build_and_edit(event, [
+            {"text": "🚀", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ROCKET_EMOJI_ID}},
+            {"text": " Перезапускаюсь...", "entity": MessageEntityBold}
+        ])
     except Exception as e:
-        await event.respond(f"**❌ Не удалось вызвать меню перезагрузки.**\n"
-                            f"**Ошибка:** `{e}`")
-
-# ❗️❗️❗️ НОВЫЙ ОБРАБОТЧИК: Показывает кнопки ❗️❗️❗️
-@inline_handler(r"^restart:confirm$", title="🚀 Перезагрузка")
-async def restart_inline_handler(event):
-    """Генерирует инлайн-меню для .restart"""
-    text = "⚠️ <b>Вы уверены, что хотите перезагрузить KoteLoader?</b>"
-    buttons = [
-        [
-            Button.inline("🚀 Перезагрузить", data="do_restart"),
-            Button.inline("❌ Отмена", data="close_panel")
-        ]
-    ]
-    return text, buttons
-
-# ❗️❗️❗️ НОВЫЙ ОБРАБОТЧИК: Ловит нажатие кнопки "Перезагрузить" ❗️❗️❗️
-@callback_handler(r"^do_restart$")
-async def restart_callback_handler(event):
-    """Обрабатывает нажатие кнопки 'Перезагрузить'"""
-    await event.edit("🚀 <b>Перезапускаюсь...</b>", parse_mode="html")
-    
-    # Отправляем команду юзерботу, чтобы он выполнил реальную перезагрузку
-    prefix = db.get_setting("prefix", default=".")
-    await event.client.user_client.send_message("me", f"{prefix}real_restart")
-
-# ❗️❗️❗️ ИЗМЕНЕНИЕ: Старая команда .restart переименована в .real_restart ❗️❗️❗️
-@register("real_restart", incoming=True)
-async def real_restart_bot(event):
-    """Выполняет реальную перезагрузку (эта команда скрыта)."""
-    # Доступна только самому себе (т.к. вызывается через send_message("me", ...))
-    if not event.out and event.sender_id != (await event.client.get_me()).id:
-        return
+        print(f"Не удалось отправить сообщение о перезапуске: {e}")
     
     db.set_setting("restart_report_chat_id", str(event.chat_id))
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Сохраняем время начала перезапуска ❗️❗️❗️
+    db.set_setting("restart_start_time", str(time.time()))
     
-    # Не отвечаем, так как сообщение "Перезапускаюсь..." уже было
     os.execv(sys.executable, [sys.executable] + sys.argv)
+
+# ❗️❗️❗️ ИЗМЕНЕНИЕ: Старые обработчики инлайн-меню .restart УДАЛЕНЫ ❗️❗️❗️
+# (inline_handler, callback_handler и real_restart)
 
 
 @register("trust", incoming=True)
@@ -252,7 +228,10 @@ async def clear_module_data(event):
     args = event.message.text.split(maxsplit=1)
     
     if len(args) < 2:
-        modules_with_data = list(set(db.get_modules_with_configs() + db.get_modules_with_data()))
+        # ❗️❗️❗️ ИСПРАВЛЕНИЕ: Это место не было исправлено в файлах, исправляю
+        # (db.get_modules_with_configs и db.get_modules_with_data не существуют в database.py)
+        stats = db.get_modules_stats()
+        modules_with_data = sorted(stats.keys())
         
         parts = [
             {"text": "🗑", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": TRASH_EMOJI_ID}},
@@ -263,7 +242,7 @@ async def clear_module_data(event):
             parts.append({"text": "Нет модулей с данными в БД."})
         else:
             parts.append({"text": "Доступные модули для очистки:\n", "entity": MessageEntityBold})
-            for module in sorted(modules_with_data):
+            for module in modules_with_data:
                 parts.append({"text": "• "})
                 parts.append({"text": f"{module}", "entity": MessageEntityCode})
                 parts.append({"text": "\n"})

@@ -3,6 +3,7 @@
 import traceback
 from telethon import events
 from telethon.tl.functions.messages import GetInlineBotResultsRequest, SendInlineBotResultRequest
+from telethon.errors.rpcerrorlist import ChatSendInlineForbiddenError
 
 async def _call_inline_bot(event: events.NewMessage.Event, query: str):
     """Внутренняя функция для вызова инлайн-бота с указанным запросом."""
@@ -24,15 +25,31 @@ async def _call_inline_bot(event: events.NewMessage.Event, query: str):
         if not result.results:
             return await event.edit(f"❌ **Бот не вернул результат для запроса:** `{query}`")
 
-        await event.client(SendInlineBotResultRequest(
-            peer=await event.get_input_chat(),
-            query_id=result.query_id,
-            id=str(result.results[0].id)
-        ))
+        try:
+            await event.client(SendInlineBotResultRequest(
+                peer=await event.get_input_chat(),
+                query_id=result.query_id,
+                id=str(result.results[0].id)
+            ))
+            
+            await event.delete()
+            
+        except ChatSendInlineForbiddenError:
+            # В этом чате нельзя отправлять инлайн-результаты
+            # Отправляем обычное текстовое сообщение с информацией
+            await event.edit(
+                f"⚠️ **В этом чате запрещены инлайн-боты.**\n\n"
+                f"💡 **Совет:** Используйте команду в **Избранном** или **личных сообщениях**.\n\n"
+                f"🔍 Запрос: `{query}`"
+            )
         
-        await event.delete()
-        
-    except Exception:
+    except ChatSendInlineForbiddenError:
+        # Дублируем обработку на верхнем уровне на случай, если ошибка в другом месте
+        await event.edit(
+            f"⚠️ **В этом чате запрещены инлайн-боты.**\n\n"
+            f"💡 **Совет:** Используйте команду в **Избранном** или **личных сообщениях**."
+        )
+    except Exception as e:
         await event.edit(f"⚠️ **Ошибка при вызове инлайн-панели:**\n`{traceback.format_exc()}`")
 
 async def user_panel_helper(event: events.NewMessage.Event):

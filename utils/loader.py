@@ -18,11 +18,6 @@ CALLBACK_REGISTRY = {}
 INLINE_HANDLERS_REGISTRY = {}
 WATCHERS_REGISTRY = [] 
 
-EMOJI_SUCCESS = "<emoji document_id=5255813619702049821>✅</emoji>"
-EMOJI_ERROR = "<emoji document_id=5985346521103604145>❌</emoji>"
-EMOJI_TRASH = "<emoji document_id=5255831443816327915>🗑️</emoji>"
-
-
 # --- Базовый класс для модулей ---
 class Module:
     def __init__(self):
@@ -82,6 +77,7 @@ def check_module_dependencies(module_name: str) -> dict:
     Возвращает dict со статусом.
     """
     try:
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: .lower() УБРАН ❗️❗️❗️
         importlib.import_module(f"modules.{module_name}")
         return {"status": "ok"}
     except (ImportError, ModuleNotFoundError) as e:
@@ -94,15 +90,21 @@ def check_module_dependencies(module_name: str) -> dict:
         return {"status": "error", "library": "unknown", "details": str(e)}
 
 # --- Основная логика загрузчика ---
-async def load_module(client, module_name: str, chat_id: int = None) -> str:
+
+async def load_module(client, module_name: str, chat_id: int = None) -> dict:
     """Загружает модуль и регистрирует его обработчики."""
     if module_name in client.modules:
-        return f"{EMOJI_SUCCESS} Модуль <b>{module_name}</b> уже загружен."
+        return {"status": "info", "message": f"Модуль {module_name} уже загружен."}
 
     try:
-        if f"modules.{module_name}" in sys.modules:
-            importlib.reload(sys.modules[f"modules.{module_name}"])
-        imported_module = importlib.import_module(f"modules.{module_name}")
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
+        # module_name (например, 'Spammer.spam') УЖЕ имеет правильный регистр,
+        # так как он приходит из _find_module_by_name() в modules.py
+        import_name = f"modules.{module_name}"
+        
+        if import_name in sys.modules:
+            importlib.reload(sys.modules[import_name])
+        imported_module = importlib.import_module(import_name)
 
         registered_handlers = []
         module_instance = None
@@ -153,19 +155,22 @@ async def load_module(client, module_name: str, chat_id: int = None) -> str:
             "handlers": registered_handlers
         }
         
-        return f"{EMOJI_SUCCESS} Модуль <b>{module_name}</b> успешно загружен."
+        return {"status": "ok", "message": f"Модуль {module_name} успешно загружен."}
 
     except (ImportError, ModuleNotFoundError) as e:
         traceback.print_exc()
-        return f"{EMOJI_ERROR} Ошибка при загрузке <b>{module_name}</b>:\n<code>{e}</code>"
+        # Эта проверка все еще полезна, если пользователь введет имя с неверным регистром
+        if "No module named" in str(e) and module_name.lower() != module_name:
+             return {"status": "error", "message": f"Ошибка: {e}. Возможно, имя модуля должно быть в нижнем регистре: `{module_name.lower()}`"}
+        return {"status": "error", "message": f"Ошибка при загрузке {module_name}:\n{e}"}
     except Exception as e:
         traceback.print_exc()
-        return f"{EMOJI_ERROR} Ошибка при загрузке <b>{module_name}</b>:\n<code>{e}</code>"
+        return {"status": "error", "message": f"Ошибка при загрузке {module_name}:\n{e}"}
 
-async def unload_module(client, module_name: str) -> str:
+async def unload_module(client, module_name: str) -> dict:
     """Выгружает модуль из памяти."""
     if module_name not in client.modules:
-        return f"Модуль <b>{module_name}</b> не загружен."
+        return {"status": "info", "message": f"Модуль {module_name} не загружен."}
 
     try:
         module_data = client.modules[module_name]
@@ -177,29 +182,32 @@ async def unload_module(client, module_name: str) -> str:
             COMMANDS_REGISTRY[command] = [cmd for cmd in COMMANDS_REGISTRY[command] if cmd["module"] != module_name]
             if not COMMANDS_REGISTRY[command]: del COMMANDS_REGISTRY[command]
 
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
         for pattern in list(CALLBACK_REGISTRY):
             if CALLBACK_REGISTRY[pattern].__module__ == f"modules.{module_name}":
                 del CALLBACK_REGISTRY[pattern]
         
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
         for pattern in list(INLINE_HANDLERS_REGISTRY):
             if INLINE_HANDLERS_REGISTRY[pattern]["func"].__module__ == f"modules.{module_name}":
                 del INLINE_HANDLERS_REGISTRY[pattern]
 
         del client.modules[module_name]
 
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
         for name in list(sys.modules):
             if name == f"modules.{module_name}" or name.startswith(f"modules.{module_name}."):
                 del sys.modules[name]
 
-        return f"{EMOJI_TRASH} Модуль <b>{module_name}</b> успешно выгружен."
+        return {"status": "ok", "message": f"Модуль {module_name} успешно выгружен."}
     except Exception as e:
-        return f"{EMOJI_ERROR} Ошибка при выгрузке <b>{module_name}</b>:\n<code>{e}</code>"
+        return {"status": "error", "message": f"Ошибка при выгрузке {module_name}:\n{e}"}
 
-async def reload_module(client, module_name: str, chat_id: int = None) -> str:
+async def reload_module(client, module_name: str, chat_id: int = None) -> dict:
     """Перезагружает модуль."""
-    unload_status = await unload_module(client, module_name)
-    if "успешно" not in unload_status and "не загружен" not in unload_status:
-        return unload_status
+    unload_result = await unload_module(client, module_name)
+    if unload_result["status"] == "error":
+        return unload_result
     
     return await load_module(client, module_name, chat_id)
 
@@ -210,7 +218,9 @@ def get_all_modules() -> list[str]:
         if path.name.startswith("_"):
             continue
         
+        # 'modules/Spammer/spam.py' -> 'Spammer/spam'
         relative_path = path.relative_to(MODULES_DIR)
+        # 'Spammer/spam' -> ('Spammer', 'spam') -> 'Spammer.spam'
         import_path = ".".join(relative_path.with_suffix("").parts)
         all_modules.append(import_path)
         

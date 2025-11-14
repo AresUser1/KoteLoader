@@ -24,7 +24,7 @@ INFO_EMOJI_ID = 5879813604068298387  # ℹ️
 USAGE_EMOJI_ID = 5197195523794157505  # ▫️
 
 # Список системных модулей
-SYSTEM_MODULES = ["admin", "help", "install", "modules", "updater", "logs", "ping", "profile", "config", "hider", "power", "git_manager"]
+SYSTEM_MODULES = ["admin", "help", "install", "modules", "updater", "logs", "ping", "profile", "config", "hider", "power", "git_manager", "core_updater"]
 
 @register("help", incoming=True)
 async def help_cmd(event):
