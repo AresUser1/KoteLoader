@@ -1,6 +1,6 @@
 # modules/git_manager.py
 """<manifest>
-version: 1.0.3
+version: 1.0.4
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/git_manager.py
 author: Kote
 
@@ -74,8 +74,9 @@ async def set_repo_alias(event):
 @register("set_gh_token", incoming=True)
 async def set_gh_token(event):
     """Сохраняет GitHub PAT в базу данных."""
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
     if not check_permission(event, min_level="OWNER"):
-        return await build_and_edit(event, [{"text": "🚫 Только владелец может устанавливать токен.", "entity": MessageEntityBold}])
+        return
 
     token = (event.pattern_match.group(1) or "").strip()
     if not token.startswith("ghp_"):
@@ -126,7 +127,6 @@ async def upload_module_cmd(event):
     # 1. Читаем и обновляем версию в манифесте
     try:
         content = module_path.read_text(encoding="utf-8")
-        # ❗️ Используем тот же парсер, что и в updater.py
         from services.module_info_cache import parse_manifest
         manifest = parse_manifest(content)
         
@@ -135,11 +135,8 @@ async def upload_module_cmd(event):
 
         old_version = manifest["version"]
         new_version = increment_version(old_version)
-        # Обновляем версию прямо в тексте файла
-        content = content.replace(f'"version": "{old_version}"', f'"version": "{new_version}"')
-        content = content.replace(f"version: {old_version}", f"version: {new_version}") # Для старого формата
+        content = content.replace(f"version: {old_version}", f"version: {new_version}")
         
-        # Перезаписываем локальный файл с новой версией
         module_path.write_text(content, encoding="utf-8")
         
         await build_and_edit(event, [
@@ -151,7 +148,6 @@ async def upload_module_cmd(event):
 
     # 2. Подготовка к загрузке на GitHub
     owner, repo = repo_info["owner"], repo_info["repo"]
-    # Получаем путь к файлу *относительно* папки modules/
     file_path_in_repo = "modules/" + module_name.replace(".", "/") + ".py"
     api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path_in_repo}"
     
@@ -180,14 +176,14 @@ async def upload_module_cmd(event):
         data = {
             "message": commit_message,
             "content": content_b64,
-            "branch": "main" # ❗️ Убедитесь, что ваша основная ветка называется 'main'
+            "branch": "main" 
         }
         if current_sha:
-            data["sha"] = current_sha # Добавляем SHA, если обновляем файл
+            data["sha"] = current_sha 
 
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.put(api_url, json=data) as response:
-                if response.status not in [200, 201]: # 200 (OK) или 201 (Created)
+                if response.status not in [200, 201]: 
                     return await build_and_edit(event, [
                         {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
                         {"text": f" Ошибка загрузки на GitHub (PUT): {response.status}", "entity": MessageEntityBold},

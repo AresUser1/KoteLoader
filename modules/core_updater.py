@@ -1,6 +1,6 @@
 # modules/core_updater.py
 """<manifest>
-version: 1.0.4
+version: 1.0.5
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/core_updater.py
 author: Kote
 
@@ -14,7 +14,7 @@ URL репозитория встроен в код.
 
 import asyncio
 import traceback
-import time 
+import time
 from core import register
 from utils import database as db
 from utils.message_builder import build_and_edit
@@ -25,12 +25,9 @@ from telethon.tl.types import MessageEntityBold, MessageEntityCode
 async def update_core_cmd(event):
     """Принудительно обновляет ядро бота из Git и перезагружается."""
     
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
     if not check_permission(event, min_level="OWNER"):
-        return await build_and_edit(event, [
-            {"text": "🚫"},
-            {"text": " Только владелец", "entity": MessageEntityBold},
-            {"text": " может выполнить эту команду."}
-        ])
+        return
 
     repo_url = "https://github.com/AresUser1/KoteLoader" 
 
@@ -104,7 +101,6 @@ async def update_core_cmd(event):
             {"text": "\n(3/3)"}
         ])
         
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: Вручную сохраняем ID чата и ВРЕМЯ, КУДА прислать отчет ❗️❗️❗️
         db.set_setting("restart_report_chat_id", str(event.chat_id))
         db.set_setting("restart_start_time", str(time.time()))
         

@@ -1,6 +1,6 @@
 # modules/admin.py
 """<manifest>
-version: 1.0.7
+version: 1.0.8
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 
@@ -73,9 +73,6 @@ async def restart_bot(event):
     except Exception as e:
         print(f"Не удалось отправить сообщение о перезапуске: {e}")
     
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Сохраняем chat_id, ТОЛЬКО если это исходящая команда (от пользователя) ❗️❗️❗️
-    # Если команда входящая (от .updatecore), мы ПОЛАГАЕМСЯ на то, 
-    # что .updatecore УЖЕ установил правильный chat_id.
     if event.out:
         db.set_setting("restart_report_chat_id", str(event.chat_id))
         db.set_setting("restart_start_time", str(time.time()))
@@ -86,13 +83,9 @@ async def restart_bot(event):
 @register("trust", incoming=True)
 async def trust_user(event):
     """Добавить пользователя в список доверенных лиц."""
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
     if not check_permission(event, min_level="OWNER"):
-        if db.get_user_level(event.sender_id) != "OWNER":
-            return
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Только владелец может использовать эту команду.", "entity": MessageEntityBold}
-        ])
+        return
 
     prefix = db.get_setting("prefix", default=".")
     
@@ -118,13 +111,9 @@ async def trust_user(event):
 @register("untrust", incoming=True)
 async def untrust_user(event):
     """Удалить пользователя из списка доверенных лиц."""
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
     if not check_permission(event, min_level="OWNER"):
-        if db.get_user_level(event.sender_id) != "OWNER":
-            return
-        return await build_and_edit(event, [
-            {"text": "🚫 "}, 
-            {"text": "Только владелец может использовать эту команду.", "entity": MessageEntityBold}
-        ])
+        return
 
     prefix = db.get_setting("prefix", default=".")
     
