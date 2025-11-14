@@ -3,13 +3,13 @@
 Модуль для проверки и установки обновлений для других модулей через интерактивное меню.
 
 <manifest>
-version: 1.0.3
+version: 1.0.4
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/updater.py
 author: Kote
 
 Команды:
 • check_updates - Проверить обновления и показать меню в боте.
-• update <название> - Установить обновление (используется ботом).
+• update <название> [chat_id] - Установить обновление (используется ботом).
 </manifest>"""
 
 import aiohttp
@@ -26,7 +26,6 @@ from utils.loader import reload_module
 from utils.security import check_permission
 from utils.message_builder import build_and_edit
 from telethon.tl.types import MessageEntityBold
-# ❗️❗️❗️ ДОБАВЛЕН ИМПОРТ ❗️❗️❗️
 from handlers.user_commands import _call_inline_bot
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
@@ -81,15 +80,12 @@ async def check_for_updates():
             
     return updates_to_do
 
-# ❗️❗️❗️ БЛОК ИСПРАВЛЕНИЙ ❗️❗️❗️
 @register("check_updates", incoming=True)
 async def check_updates_cmd(event):
     """Запускает проверку обновлений через инлайн-меню."""
     if not check_permission(event, min_level="TRUSTED"):
         return
         
-    # Теперь мы используем тот же _call_inline_bot, что и .panel
-    # Это гарантирует, что сообщение будет удалено и отправлено корректно.
     try:
         await _call_inline_bot(event, "updates:check")
     except Exception as e:
@@ -100,23 +96,39 @@ async def check_updates_cmd(event):
 async def update_cmd(event):
     """
     Команда, которую будет вызывать бот для фактического обновления.
-    Usage: <название_модуля>
+    Usage: <название_модуля> [chat_id_to_report]
     """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
-    module_to_update = (event.pattern_match.group(1) or "").strip()
-    if not module_to_update: return
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Парсим аргументы (модуль и ID чата для отчета) ❗️❗️❗️
+    args = (event.pattern_match.group(1) or "").strip().split()
+    if not args:
+        return # Ничего не передано
     
-    # Мы не можем использовать build_and_edit, если сообщение НЕ .out
-    # Нам нужно ответить на .update, а не редактировать его.
-    message = await event.respond(f"**Обновляю `{module_to_update}`...**")
+    module_to_update = args[0]
+    report_chat_id = event.chat_id # По умолчанию отвечаем туда, откуда пришла команда (в "Избранное" или в группу, если вызвано вручную)
+    
+    if len(args) > 1:
+        try:
+            report_chat_id = int(args[1])
+        except ValueError:
+            pass # Если второй аргумент не число, игнорируем и отвечаем в текущий чат
+
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Не редактируем, а отправляем сообщение в чат отчета ❗️❗️❗️
+    try:
+        # Используем parse_mode="md", так как build_and_edit здесь не нужен
+        message = await event.client.send_message(report_chat_id, f"**Обновляю `{module_to_update}`...**", parse_mode="md")
+    except Exception as e:
+        # Если не удалось отправить в чат отчета (например, бота кикнули), сообщаем в "Избранное"
+        await event.respond(f"**Не удалось отправить отчет об обновлении {module_to_update} в чат {report_chat_id}.**\nОшибка: `{e}`", parse_mode="md")
+        return
     
     updates = await check_for_updates()
     found = next((u for u in updates if u["module_name"] == module_to_update), None)
     
     if not found:
-        return await message.edit(f"**ℹ️ Обновление для `{module_to_update}` не найдено.**")
+        return await message.edit(f"**ℹ️ Обновление для `{module_to_update}` не найдено.**", parse_mode="md")
         
     try:
         url_to_fetch = f"{found['source']}?t={int(time.time())}"
@@ -130,7 +142,8 @@ async def update_cmd(event):
         
         await reload_module(event.client, found["module_name"])
         
-        await message.edit(f"✅ **Модуль `{found['module_name']}` обновлен до версии {found['new_version']}!**")
+        await message.edit(f"✅ **Модуль `{found['module_name']}` обновлен до версии {found['new_version']}!**", parse_mode="md")
         
     except Exception:
-        await message.edit(f"**❌ Ошибка при обновлении `{module_to_update}`:**\n`{traceback.format_exc()}`")
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: Отправляем ошибку в чат отчета ❗️❗️❗️
+        await message.edit(f"**❌ Ошибка при обновлении `{module_to_update}`:**\n`{traceback.format_exc()}`", parse_mode="md")

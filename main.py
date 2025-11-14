@@ -7,7 +7,8 @@ import os
 import uuid
 from configparser import ConfigParser
 from telethon import TelegramClient, events
-from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityCustomEmoji
+# ❗️❗️❗️ ИЗМЕНЕНИЕ: Убран импорт MessageEntityCustomEmoji ❗️❗️❗️
+from telethon.tl.types import MessageEntityBold, MessageEntityCode
 
 # --- БАЗОВАЯ НАСТРОЙКА ЛОГГИРОВАНИЯ ---
 LOG_FILE = "kote_loader.log"
@@ -238,12 +239,8 @@ async def main():
         print("Не удалось запустить user-клиент. Выход.")
         return
         
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Запускаем воркер СНАЧАЛА ❗️❗️❗️
-    # Он загрузит модули ОДИН РАЗ
     worker_task = asyncio.create_task(command_worker(user_client))
     
-    # Даем воркеру секунду, чтобы он успел загрузить модули
-    # перед тем, как мы попытаемся отправить отчет о перезагрузке
     await asyncio.sleep(1)
 
     report_chat_id_str = db.get_setting("restart_report_chat_id")
@@ -251,42 +248,30 @@ async def main():
         try:
             report_chat_id = int(report_chat_id_str)
             
-            # ❗️❗️❗️ ИЗМЕНЕНИЕ: Добавляем расчет времени перезагрузки ❗️❗️❗️
             restart_start_time_str = db.get_setting("restart_start_time")
             restart_duration_text = ""
             if restart_start_time_str:
                 try:
                     restart_start_time = float(restart_start_time_str)
-                    # START_TIME - это время, когда main.py ЗАВЕРШИЛ загрузку
                     duration = time.time() - restart_start_time
                     restart_duration_text = f"{duration:.2f} сек"
                 except Exception:
-                    pass # Не удалось распарсить время
-            # ❗️❗️❗️ КОНЕЦ ИЗМЕНЕНИЯ ❗️❗️❗️
+                    pass 
             
-            # ❗️❗️❗️ ИЗМЕНЕНИЕ: Больше не загружаем модули здесь ❗️❗️❗️
-            # Просто читаем, сколько их загрузил воркер
             loaded_modules_count = len(getattr(user_client, 'modules', {}))
             
-            ROCKET_EMOJI_ID = 5445284980978621387
-            SUCCESS_EMOJI_ID = 5255813619702049821
-            CLOCK_EMOJI_ID = 5778605968208170641 # ❗️❗️❗️ НОВЫЙ ЭМОДЗИ ❗️❗️❗️
-            
+            # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убраны ID премиум-эмодзи ❗️❗️❗️
             report_parts = [
-                {"text": "🚀", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ROCKET_EMOJI_ID}},
-                {"text": " Перезагрузка успешно завершена!", "entity": MessageEntityBold},
+                {"text": "🚀 Перезагрузка успешно завершена!", "entity": MessageEntityBold},
                 {"text": "\n\n"},
-                {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
-                {"text": " Загружено модулей: ", "entity": MessageEntityBold},
+                {"text": "✅ Загружено модулей: ", "entity": MessageEntityBold},
                 {"text": str(loaded_modules_count), "entity": MessageEntityCode},
             ]
             
-            # ❗️❗️❗️ ИЗМЕНЕНИЕ: Добавляем время в отчет ❗️❗️❗️
             if restart_duration_text:
                 report_parts.extend([
                     {"text": "\n"},
-                    {"text": "⏱️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": CLOCK_EMOJI_ID}},
-                    {"text": " Время перезапуска: ", "entity": MessageEntityBold},
+                    {"text": "⏱️ Время перезапуска: ", "entity": MessageEntityBold},
                     {"text": restart_duration_text, "entity": MessageEntityCode},
                 ])
             # ❗️❗️❗️ КОНЕЦ ИЗМЕНЕНИЯ ❗️❗️❗️
@@ -297,11 +282,11 @@ async def main():
             print(f"Не удалось отправить отчёт о перезагрузке: {e}")
         finally:
             db.set_setting("restart_report_chat_id", "")
-            db.set_setting("restart_start_time", "") # ❗️❗️❗️ Очищаем время ❗️❗️❗️
+            db.set_setting("restart_start_time", "")
 
     try:
         tasks = [
-            worker_task, # Добавляем уже запущенный воркер
+            worker_task, 
             user_client.run_until_disconnected()
         ]
         if bot_client:

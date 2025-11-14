@@ -34,6 +34,8 @@ async def updates_callback_handler(event):
     await event.answer("Отправляю команду на обновление...")
 
     user_client = event.client.user_client
+    # ❗️❗️❗️ НОВОЕ: Запоминаем, куда слать отчет ❗️❗️❗️
+    report_chat_id = event.chat_id
 
     if action == "all":
         from modules.updater import check_for_updates
@@ -42,14 +44,16 @@ async def updates_callback_handler(event):
         modules_to_update = [u["module_name"] for u in updates]
 
         for module_name in modules_to_update:
-             await user_client.send_message("me", f".update {module_name}")
+             # ❗️❗️❗️ ИЗМЕНЕНИЕ: Передаем ID чата для отчета ❗️❗️❗️
+             await user_client.send_message("me", f".update {module_name} {report_chat_id}")
              await asyncio.sleep(0.3) 
 
         await event.edit("✅ <b>Команды на обновление всех модулей отправлены!</b>", buttons=None, parse_mode='html')
 
     else: 
         module_name = action
-        await user_client.send_message("me", f".update {module_name}")
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: Передаем ID чата для отчета ❗️❗️❗️
+        await user_client.send_message("me", f".update {module_name} {report_chat_id}")
         await event.edit(f"✅ <b>Команда на обновление <code>{module_name}</code> отправлена!</b>", buttons=None, parse_mode='html')
 
 async def inline_query_handler(event: events.InlineQuery):
@@ -139,7 +143,6 @@ async def callback_query_handler(event: events.CallbackQuery):
     user_client = event.client.user_client
 
     try:
-        # ❗️❗️❗️ ИСПРАВЛЕНИЕ: event.delete() заменен на event.edit() ❗️❗️❗️
         if data == "close_panel":
             await event.answer("Закрыто.")
             await event.edit("Панель закрыта.", buttons=None)
@@ -224,7 +227,7 @@ async def callback_query_handler(event: events.CallbackQuery):
             else:
                 result = await load_module(user_client, module_name)
                 update_state_file(user_client)
-                await event.answer(result.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", ""), alert=True)
+                await event.answer(result["message"], alert=True)
                 text, buttons = build_module_menu(module_name, as_text=True)
 
         elif data.startswith("unload:"):
@@ -237,7 +240,7 @@ async def callback_query_handler(event: events.CallbackQuery):
             else:
                 result = await unload_module(user_client, module_name)
                 update_state_file(user_client)
-                await event.answer(result.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", ""), alert=True)
+                await event.answer(result["message"], alert=True)
                 text, buttons = build_module_menu(module_name, as_text=True)
 
         elif data.startswith("reload:"):
@@ -250,7 +253,7 @@ async def callback_query_handler(event: events.CallbackQuery):
             else:
                 result = await reload_module(user_client, module_name)
                 update_state_file(user_client)
-                await event.answer(result.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", ""), alert=True)
+                await event.answer(result["message"], alert=True)
                 text, buttons = build_module_menu(module_name, as_text=True)
 
         elif data.startswith("page:"):

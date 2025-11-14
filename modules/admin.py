@@ -1,6 +1,6 @@
 # modules/admin.py
 """<manifest>
-version: 1.0.5
+version: 1.0.7
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 
@@ -20,7 +20,7 @@ import sys
 import shutil
 import zipfile
 import asyncio
-import time # ❗️❗️❗️ ИЗМЕНЕНИЕ: Добавлен time
+import time
 from pathlib import Path
 from datetime import datetime
 from core import register, inline_handler, callback_handler
@@ -28,20 +28,8 @@ from utils import database as db
 from utils.message_builder import build_and_edit
 from utils.security import check_permission
 from handlers.user_commands import _call_inline_bot
-from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityCode, MessageEntityBold
+from telethon.tl.types import MessageEntityCode, MessageEntityBold
 from telethon.tl.custom import Button
-
-# --- ПРЕМИУМ ЭМОДЗИ ---
-SUCCESS_EMOJI_ID = 5255813619702049821
-ROCKET_EMOJI_ID = 5445284980978621387
-TRASH_EMOJI_ID = 5255831443816327915
-CHART_EMOJI_ID = 5364265190353286344
-WRENCH_EMOJI_ID = 5258023599419171861
-ERROR_EMOJI_ID = 5985346521103604145
-FOLDER_EMOJI_ID = 5877332341331857066
-CLOCK_EMOJI_ID = 5778605968208170641
-ZIP_EMOJI_ID = 5445284980978621387 
-WARN_EMOJI_ID = 4915853119839011973 # ⚠️
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 
@@ -59,44 +47,40 @@ async def set_prefix(event):
             {"text": "Текущий префикс: "},
             {"text": f"{prefix}", "entity": MessageEntityCode},
             {"text": "\n\n"},
-            {"text": "🔧", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": WRENCH_EMOJI_ID}},
-            {"text": f" Для смены: {prefix}prefix <новый_префикс>", "entity": MessageEntityCode}
+            {"text": f"🔧 Для смены: {prefix}prefix <новый_префикс>", "entity": MessageEntityCode}
         ])
         return
 
     new_prefix = args[1]
     db.set_setting("prefix", new_prefix)
     await build_and_edit(event, [
-        {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
+        {"text": "✅"},
         {"text": " Префикс изменен на ", "entity": MessageEntityBold},
         {"text": f"{new_prefix}", "entity": MessageEntityCode},
         {"text": f".\n\nЧтобы изменения вступили в силу, используйте команду {prefix}restart", "entity": MessageEntityCode}
     ])
 
-# ❗️❗️❗️ ИЗМЕНЕНИЕ: .restart ТЕПЕРЬ СРАЗУ ПЕРЕЗАГРУЖАЕТ ❗️❗️❗️
 @register("restart", incoming=True)
 async def restart_bot(event):
     """Выполняет реальную перезагрузку."""
     if not check_permission(event, min_level="TRUSTED"):
         return
     
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Сразу отвечаем, что перезапускаемся ❗️❗️❗️
     try:
         await build_and_edit(event, [
-            {"text": "🚀", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ROCKET_EMOJI_ID}},
-            {"text": " Перезапускаюсь...", "entity": MessageEntityBold}
+            {"text": "🚀 Перезапускаюсь...", "entity": MessageEntityBold}
         ])
     except Exception as e:
         print(f"Не удалось отправить сообщение о перезапуске: {e}")
     
-    db.set_setting("restart_report_chat_id", str(event.chat_id))
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Сохраняем время начала перезапуска ❗️❗️❗️
-    db.set_setting("restart_start_time", str(time.time()))
+    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Сохраняем chat_id, ТОЛЬКО если это исходящая команда (от пользователя) ❗️❗️❗️
+    # Если команда входящая (от .updatecore), мы ПОЛАГАЕМСЯ на то, 
+    # что .updatecore УЖЕ установил правильный chat_id.
+    if event.out:
+        db.set_setting("restart_report_chat_id", str(event.chat_id))
+        db.set_setting("restart_start_time", str(time.time()))
     
     os.execv(sys.executable, [sys.executable] + sys.argv)
-
-# ❗️❗️❗️ ИЗМЕНЕНИЕ: Старые обработчики инлайн-меню .restart УДАЛЕНЫ ❗️❗️❗️
-# (inline_handler, callback_handler и real_restart)
 
 
 @register("trust", incoming=True)
@@ -125,7 +109,7 @@ async def trust_user(event):
         
     db.add_user(user_id, "TRUSTED")
     await build_and_edit(event, [
-        {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
+        {"text": "✅"},
         {"text": " Пользователь "},
         {"text": f"{user_id}", "entity": MessageEntityCode},
         {"text": " добавлен в доверенные."}
@@ -163,7 +147,7 @@ async def untrust_user(event):
 
     db.remove_user(user_id)
     await build_and_edit(event, [
-        {"text": "🗑", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": TRASH_EMOJI_ID}},
+        {"text": "🗑"},
         {"text": " Пользователь "},
         {"text": f"{user_id}", "entity": MessageEntityCode},
         {"text": " удален из доверенных."}
@@ -180,13 +164,13 @@ async def show_db_stats(event):
         parts = []
         if not stats:
             return await build_and_edit(event, [
-                {"text": "📊", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": CHART_EMOJI_ID}},
+                {"text": "📊"},
                 {"text": " Статистика БД", "entity": MessageEntityBold},
                 {"text": "\n\nНикакие модули еще не использовали базу данных."}
             ])
 
         parts.extend([
-            {"text": "📊", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": CHART_EMOJI_ID}},
+            {"text": "📊"},
             {"text": " Статистика использования БД", "entity": MessageEntityBold},
             {"text": "\n\n"}
         ])
@@ -194,7 +178,7 @@ async def show_db_stats(event):
         total_configs, total_data = 0, 0
         for module, info in sorted(stats.items()):
             parts.extend([
-                {"text": "🔧", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": WRENCH_EMOJI_ID}},
+                {"text": "🔧"},
                 {"text": f" {module}", "entity": MessageEntityBold},
                 {"text": f":\n  • Настроек: {info['configs']}\n  • Данных: {info['data_entries']}\n"}
             ])
@@ -205,7 +189,7 @@ async def show_db_stats(event):
             total_data += info['data_entries']
 
         parts.extend([
-            {"text": "📊", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": CHART_EMOJI_ID}},
+            {"text": "📊"},
             {"text": " Итого", "entity": MessageEntityBold},
             {"text": f":\n• Модулей с данными: {len(stats)}\n• Всего настроек: {total_configs}\n• Всего записей данных: {total_data}"}
         ])
@@ -213,7 +197,7 @@ async def show_db_stats(event):
         
     except Exception as e:
         await build_and_edit(event, [
-            {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+            {"text": "❌"},
             {"text": " Ошибка при получении статистики", "entity": MessageEntityBold},
             {"text": f":\n`{e}`"}
         ])
@@ -228,13 +212,11 @@ async def clear_module_data(event):
     args = event.message.text.split(maxsplit=1)
     
     if len(args) < 2:
-        # ❗️❗️❗️ ИСПРАВЛЕНИЕ: Это место не было исправлено в файлах, исправляю
-        # (db.get_modules_with_configs и db.get_modules_with_data не существуют в database.py)
         stats = db.get_modules_stats()
         modules_with_data = sorted(stats.keys())
         
         parts = [
-            {"text": "🗑", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": TRASH_EMOJI_ID}},
+            {"text": "🗑"},
             {"text": " Очистка данных модуля", "entity": MessageEntityBold},
             {"text": "\n\n"}
         ]
@@ -259,7 +241,7 @@ async def clear_module_data(event):
         
         if not configs and not all_data:
             return await build_and_edit(event, [
-                {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+                {"text": "❌"},
                 {"text": " Модуль "},
                 {"text": f"{module_name}", "entity": MessageEntityCode},
                 {"text": " не имеет данных в БД."}
@@ -268,7 +250,7 @@ async def clear_module_data(event):
         db.clear_module(module_name)
         
         await build_and_edit(event, [
-            {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
+            {"text": "✅"},
             {"text": " Все данные модуля ", "entity": MessageEntityBold},
             {"text": f"{module_name}", "entity": MessageEntityCode},
             {"text": " удалены из БД.", "entity": MessageEntityBold},
@@ -277,7 +259,7 @@ async def clear_module_data(event):
         
     except Exception as e:
         await build_and_edit(event, [
-            {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+            {"text": "❌"},
             {"text": " Ошибка при очистке данных", "entity": MessageEntityBold},
             {"text": f":\n`{e}`"}
         ])
@@ -293,7 +275,7 @@ async def backup_database(event):
         
         if not db_file.exists():
             return await build_and_edit(event, [
-                {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+                {"text": "❌"},
                 {"text": " Файл базы данных не найден.", "entity": MessageEntityBold}
             ])
         
@@ -309,7 +291,7 @@ async def backup_database(event):
         
     except Exception as e:
         await build_and_edit(event, [
-            {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+            {"text": "❌"},
             {"text": " Ошибка создания бэкапа", "entity": MessageEntityBold},
             {"text": f":\n`{e}`"}
         ])
@@ -325,7 +307,7 @@ async def backup_modules_cmd(event):
     
     try:
         await build_and_edit(event, [
-            {"text": "🗜️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ZIP_EMOJI_ID}},
+            {"text": "🗜️"},
             {"text": " Начинаю архивацию модулей... Это может занять время.", "entity": MessageEntityBold}
         ])
 
@@ -350,7 +332,7 @@ async def backup_modules_cmd(event):
 
     except Exception as e:
         await build_and_edit(event, [
-            {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+            {"text": "❌"},
             {"text": " Ошибка при архивации модулей", "entity": MessageEntityBold},
             {"text": f":\n`{e}`"}
         ])

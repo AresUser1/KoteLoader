@@ -1,6 +1,6 @@
 # modules/core_updater.py
 """<manifest>
-version: 1.0.2
+version: 1.0.4
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/core_updater.py
 author: Kote
 
@@ -14,41 +14,32 @@ URL репозитория встроен в код.
 
 import asyncio
 import traceback
+import time 
 from core import register
 from utils import database as db
 from utils.message_builder import build_and_edit
 from utils.security import check_permission
-from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityCustomEmoji
-
-# --- Эмодзи ---
-WARN_EMOJI_ID = 4915853119839011973   # ⚠️
-ERROR_EMOJI_ID = 5985346521103604145  # ❌
-SUCCESS_EMOJI_ID = 5255813619702049821 # ✅
-ROCKET_EMOJI_ID = 5445284980978621387 # 🚀
-GIT_EMOJI_ID = 5968434789424832533   # [git]
+from telethon.tl.types import MessageEntityBold, MessageEntityCode
 
 @register("updatecore", incoming=True)
 async def update_core_cmd(event):
     """Принудительно обновляет ядро бота из Git и перезагружается."""
     
-    # 1. Эта команда ДОЛЖНА быть только для владельца
     if not check_permission(event, min_level="OWNER"):
         return await build_and_edit(event, [
-            {"text": "🚫", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+            {"text": "🚫"},
             {"text": " Только владелец", "entity": MessageEntityBold},
             {"text": " может выполнить эту команду."}
         ])
 
-    # 2. URL репозитория (встроен)
     repo_url = "https://github.com/AresUser1/KoteLoader" 
 
     prefix = db.get_setting("prefix", default=".")
     args = (event.pattern_match.group(1) or "").strip()
 
-    # 3. Защита от случайного запуска
     if args != "confirm":
         return await build_and_edit(event, [
-            {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": WARN_EMOJI_ID}},
+            {"text": "⚠️"},
             {"text": " ВНИМАНИЕ!", "entity": MessageEntityBold},
             {"text": "\n\nЭта команда полностью перезапишет все отслеживаемые (core) файлы последней версией из Git. "},
             {"text": "Все несохраненные изменения в ядре будут потеряны.", "entity": MessageEntityBold},
@@ -58,15 +49,13 @@ async def update_core_cmd(event):
             {"text": f"{prefix}updatecore confirm", "entity": MessageEntityCode}
         ])
 
-    # 4. Выполнение обновления
     try:
         await build_and_edit(event, [
-            {"text": "⚙️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": GIT_EMOJI_ID}},
+            {"text": "⚙️"},
             {"text": " Начинаю обновление ядра...", "entity": MessageEntityBold},
             {"text": "\n(1/3) Получаю данные (git fetch)..."}
         ])
         
-        # --- Шаг 1: git fetch ---
         process_fetch = await asyncio.create_subprocess_shell(
             f"git fetch {repo_url}",
             stdout=asyncio.subprocess.PIPE,
@@ -77,14 +66,13 @@ async def update_core_cmd(event):
         if process_fetch.returncode != 0:
             error = stderr_f.decode('utf-8', 'ignore').strip() or stdout_f.decode('utf-8', 'ignore').strip()
             return await build_and_edit(event, [
-                {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+                {"text": "❌"},
                 {"text": " Ошибка 'git fetch':", "entity": MessageEntityBold},
                 {"text": f"\n{error}", "entity": MessageEntityCode}
             ])
 
-        # --- Шаг 2: git reset --hard ---
         await build_and_edit(event, [
-             {"text": "⚙️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": GIT_EMOJI_ID}},
+             {"text": "⚙️"},
              {"text": " Обновление ядра...", "entity": MessageEntityBold},
              {"text": "\n(2/3) Перезаписываю файлы (git reset --hard FETCH_HEAD)..."}
         ])
@@ -100,30 +88,31 @@ async def update_core_cmd(event):
 
         if process_reset.returncode != 0:
             return await build_and_edit(event, [
-                {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+                {"text": "❌"},
                 {"text": " Ошибка 'git reset':", "entity": MessageEntityBold},
                 {"text": f"\n{reset_output}", "entity": MessageEntityCode}
             ])
 
-        # 5. Успех и перезагрузка
         await build_and_edit(event, [
-            {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
+            {"text": "✅"},
             {"text": " Ядро успешно обновлено!", "entity": MessageEntityBold},
             {"text": f"\n\n"},
             {"text": reset_output, "entity": MessageEntityCode},
             {"text": f"\n\n"},
-            {"text": "🚀", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ROCKET_EMOJI_ID}},
+            {"text": "🚀"},
             {"text": " Перезагружаюсь для применения изменений...", "entity": MessageEntityBold},
             {"text": "\n(3/3)"}
         ])
         
-        # 6. Вызываем команду .restart 
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: Вызываем .restart, а не .real_restart ❗️❗️❗️
+        # ❗️❗️❗️ ИЗМЕНЕНИЕ: Вручную сохраняем ID чата и ВРЕМЯ, КУДА прислать отчет ❗️❗️❗️
+        db.set_setting("restart_report_chat_id", str(event.chat_id))
+        db.set_setting("restart_start_time", str(time.time()))
+        
         await event.client.send_message("me", f"{prefix}restart")
         
     except Exception as e:
         await build_and_edit(event, [
-            {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_EMOJI_ID}},
+            {"text": "❌"},
             {"text": " Критическая ошибка во время обновления:", "entity": MessageEntityBold},
             {"text": f"\n{traceback.format_exc()}", "entity": MessageEntityCode}
         ])
