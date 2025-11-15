@@ -1,6 +1,6 @@
 # modules/admin.py
 """<manifest>
-version: 1.0.8
+version: 1.1.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 
@@ -9,6 +9,7 @@ author: Kote
 • restart - Мгновенная перезагрузка юзербота.
 • trust <id/ответ> - Добавить пользователя в список доверенных лиц.
 • untrust <id/ответ> - Удалить пользователя из списка доверенных лиц.
+• listtrust - Показать список доверенных лиц и владельца (в цитатах).
 • db_stats - Показать статистику использования базы данных по модулям.
 • db_clear <модуль> - Очистить все данные (настройки и записи) указанного модуля.
 • db_backup - Создать и отправить файл бэкапа базы данных в чат.
@@ -25,10 +26,13 @@ from pathlib import Path
 from datetime import datetime
 from core import register, inline_handler, callback_handler
 from utils import database as db
-from utils.message_builder import build_and_edit
+from utils.message_builder import build_and_edit, utf16len # ❗️❗️❗️ ИЗМЕНЕНИЕ: Добавлен utf16len
 from utils.security import check_permission
 from handlers.user_commands import _call_inline_bot
-from telethon.tl.types import MessageEntityCode, MessageEntityBold
+from telethon.tl.types import (
+    MessageEntityCode, MessageEntityBold, MessageEntityTextUrl, 
+    MessageEntityBlockquote, MessageEntityItalic # ❗️❗️❗️ ИЗМЕНЕНИЕ: Добавлены Blockquote, Italic
+)
 from telethon.tl.custom import Button
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
@@ -83,7 +87,6 @@ async def restart_bot(event):
 @register("trust", incoming=True)
 async def trust_user(event):
     """Добавить пользователя в список доверенных лиц."""
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
     if not check_permission(event, min_level="OWNER"):
         return
 
@@ -111,7 +114,6 @@ async def trust_user(event):
 @register("untrust", incoming=True)
 async def untrust_user(event):
     """Удалить пользователя из списка доверенных лиц."""
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
     if not check_permission(event, min_level="OWNER"):
         return
 
@@ -141,6 +143,106 @@ async def untrust_user(event):
         {"text": f"{user_id}", "entity": MessageEntityCode},
         {"text": " удален из доверенных."}
     ])
+
+# ❗️❗️❗️ ИСПРАВЛЕННАЯ КОМАНДА (v1.1.1) ❗️❗️❗️
+@register("listtrust", incoming=True)
+async def list_trusted_users(event):
+    """Показать список всех, у кого есть доступ (OWNER и TRUSTED), в свернутых цитатах."""
+    if not check_permission(event, min_level="TRUSTED"):
+        return
+
+    text_parts = []
+    entities = []
+    current_offset = 0
+
+    def append_part(text, entity_type=None, **kwargs):
+        nonlocal current_offset
+        text_parts.append(text)
+        if entity_type:
+            length = utf16len(text)
+            if length > 0:
+                entities.append(entity_type(offset=current_offset, length=length, **kwargs))
+        current_offset += utf16len(text)
+
+    try:
+        owner_ids = db.get_users_by_level("OWNER")
+        trusted_ids = db.get_users_by_level("TRUSTED")
+        
+        owner_only_ids = owner_ids
+        trusted_only_ids = [uid for uid in trusted_ids if uid not in owner_ids] 
+
+        # 1. --- Владелец ---
+        if owner_only_ids:
+            quote_start_offset = current_offset
+            append_part("👑 Владелец:", MessageEntityBold)
+            append_part("\n")
+            
+            for owner_id in owner_only_ids:
+                try:
+                    entity = await event.client.get_entity(owner_id)
+                    name = entity.first_name or f"User {owner_id}"
+                    append_part("• ")
+                    append_part(name, MessageEntityTextUrl, url=f"tg://user?id={owner_id}")
+                    append_part(f" (ID: {owner_id})\n")
+                except Exception:
+                    append_part("• ")
+                    append_part(f"Не удалось найти ID: {owner_id}\n", MessageEntityItalic)
+            
+            # Убираем последний \n
+            if text_parts[-1].endswith('\n'):
+                text_parts[-1] = text_parts[-1][:-1]
+                current_offset -= utf16len('\n')
+
+            quote_length = current_offset - quote_start_offset
+            if quote_length > 0:
+                entities.append(MessageEntityBlockquote(offset=quote_start_offset, length=quote_length, collapsed=True))
+            
+            append_part("\n") # Отступ *после* цитаты
+
+        # 2. --- Доверенные ---
+        if trusted_only_ids:
+            # Добавляем доп. отступ, если были и владельцы
+            if owner_only_ids:
+                append_part("\n")
+
+            quote_start_offset = current_offset
+            append_part("👥 Доверенные пользователи:", MessageEntityBold)
+            append_part("\n")
+
+            for user_id in trusted_only_ids:
+                try:
+                    entity = await event.client.get_entity(user_id)
+                    name = entity.first_name or f"User {user_id}"
+                    append_part("• ")
+                    append_part(name, MessageEntityTextUrl, url=f"tg://user?id={user_id}")
+                    append_part(f" (ID: {user_id})\n")
+                except Exception:
+                    append_part("• ")
+                    append_part(f"Не удалось найти ID: {user_id}\n", MessageEntityItalic)
+
+            # Убираем последний \n
+            if text_parts[-1].endswith('\n'):
+                text_parts[-1] = text_parts[-1][:-1]
+                current_offset -= utf16len('\n')
+
+            quote_length = current_offset - quote_start_offset
+            if quote_length > 0:
+                entities.append(MessageEntityBlockquote(offset=quote_start_offset, length=quote_length, collapsed=True))
+            
+            append_part("\n") # Отступ *после* цитаты
+
+        final_text = "".join(text_parts).strip()
+        if not final_text:
+            return await build_and_edit(event, [{"text": "ℹ️ Список доступа пуст.", "entity": MessageEntityItalic}])
+        
+        await event.edit(final_text, formatting_entities=entities, link_preview=False)
+        
+    except Exception as e:
+        await build_and_edit(event, [
+            {"text": "❌ Ошибка при получении списка:", "entity": MessageEntityBold},
+            {"text": f"\n`{e}`"}
+        ])
+
 
 @register("db_stats", incoming=True)
 async def show_db_stats(event):

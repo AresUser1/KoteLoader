@@ -126,7 +126,8 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
             if getattr(func, "_is_command", False):
                 command_name, handler_args, doc = func._command_name, func._command_kwargs, func._command_doc
                 pattern_text = re.escape(PREFIX) + command_name + r"(?:\s+(.*))?$"
-                handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE)
+                # ❗️❗️❗️ ИСПРАВЛЕНИЕ: Добавлен re.DOTALL, чтобы (.*) захватывал новые строки ❗️❗️❗️
+                handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
                 handler = events.NewMessage(**handler_args)
                 client.add_event_handler(func, handler)
                 registered_handlers.append((func, handler))
