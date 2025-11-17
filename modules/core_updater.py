@@ -1,6 +1,6 @@
 # modules/core_updater.py
 """<manifest>
-version: 1.0.5
+version: 1.0.6
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/core_updater.py
 author: Kote
 
@@ -15,6 +15,9 @@ URL репозитория встроен в код.
 import asyncio
 import traceback
 import time
+# ❗️ 1. Импортируем os и sys
+import os
+import sys
 from core import register
 from utils import database as db
 from utils.message_builder import build_and_edit
@@ -25,7 +28,6 @@ from telethon.tl.types import MessageEntityBold, MessageEntityCode
 async def update_core_cmd(event):
     """Принудительно обновляет ядро бота из Git и перезагружается."""
     
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
     if not check_permission(event, min_level="OWNER"):
         return
 
@@ -104,7 +106,10 @@ async def update_core_cmd(event):
         db.set_setting("restart_report_chat_id", str(event.chat_id))
         db.set_setting("restart_start_time", str(time.time()))
         
-        await event.client.send_message("me", f"{prefix}restart")
+        # --- ❗️ 2. ИСПРАВЛЕНИЕ ЗДЕСЬ ❗️ ---
+        # Прямой вызов перезапуска
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+        # ---
         
     except Exception as e:
         await build_and_edit(event, [

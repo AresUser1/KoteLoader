@@ -603,14 +603,14 @@ async def delinfo_cmd(event):
         {"text": "Кастомное .info удалено. Теперь будет показываться стандартная карточка.", "entity": MessageEntityBold}
     ])
 
-
 @register("infovars", incoming=True)
 async def infovars_cmd(event):
+    """Показать список переменных для .setinfo."""
     if not check_permission(event, min_level="TRUSTED"):
         return
-        
+
     prefix = db.get_setting("prefix", default=".")
-    
+
     try:
         emojis = _get_static_emojis()
         emoji_part = _build_emoji_part(emojis.get('PREFIX', {"id": 0, "fallback": "⌨️"}))
@@ -623,15 +623,23 @@ async def infovars_cmd(event):
         {"text": f"{prefix}setinfo", "entity": MessageEntityCode},
         {"text": "\n\n", "entity": MessageEntityBold},
         {"text": "Плейсхолдеры будут заменены на актуальные данные:\n\n", "entity": MessageEntityItalic},
-        
+
         {"text": "• ", "entity": MessageEntityBold},
         {"text": "{owner}", "entity": MessageEntityCode},
         {"text": " - Имя владельца\n"},
-        
+
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{me}", "entity": MessageEntityCode},
+        {"text": " - Ваше имя (из Telegram)\n"},
+
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{prefix}", "entity": MessageEntityCode},
+        {"text": " - Текущий префикс\n"},
+
         {"text": "• ", "entity": MessageEntityBold},
         {"text": "{uptime}", "entity": MessageEntityCode},
         {"text": " - Время работы (аптайм)\n"},
-        
+
         {"text": "• ", "entity": MessageEntityBold},
         {"text": "{cpu}", "entity": MessageEntityCode},
         {"text": " - Нагрузка ЦПУ (%%)\n"},
@@ -639,10 +647,26 @@ async def infovars_cmd(event):
         {"text": "• ", "entity": MessageEntityBold},
         {"text": "{ram}", "entity": MessageEntityCode},
         {"text": " - Потребление ОЗУ (MB)\n"},
-        
+
         {"text": "• ", "entity": MessageEntityBold},
         {"text": "{os}", "entity": MessageEntityCode},
         {"text": " - Название ОС\n\n"},
+
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{version}", "entity": MessageEntityCode},
+        {"text": " - Версия модуля (из .info)\n"},
+
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{branch}", "entity": MessageEntityCode},
+        {"text": " - Git-ветка\n"},
+
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{commit}", "entity": MessageEntityCode},
+        {"text": " - Хэш Git-коммита\n"},
+
+        {"text": "• ", "entity": MessageEntityBold},
+        {"text": "{status}", "entity": MessageEntityCode},
+        {"text": " - Статус Git-версии\n\n"},
 
         {"text": "Вы также можете использовать ", "entity": MessageEntityItalic},
         {"text": "{emoji:KEY}", "entity": MessageEntityCode},
@@ -665,14 +689,15 @@ async def infovars_cmd(event):
     ]
     await build_and_edit(event, parts)
 
-
 @register("info", incoming=True)
 async def profile_cmd(event):
+    """Отобразить настроенную инфо-карточку."""
     if not check_permission(event, min_level="TRUSTED"):
         return
-        
+
     custom_info = db.get_module_data("profile", "custom_info_v2", default=None)
     if custom_info:
+        # --- (Весь блок 'if custom_info:' до 'try:' ЗАМЕНИТЬ на этот) ---
         ENTITY_MAP = {
             'MessageEntityBold': MessageEntityBold,
             'MessageEntityItalic': MessageEntityItalic,
@@ -694,67 +719,76 @@ async def profile_cmd(event):
                         params['document_id'] = int(params['document_id'])
                     reconstructed.append(ENTITY_MAP[class_name](**params))
             return reconstructed
-        
+
         original_text = custom_info.get('text', '') or ''
+
+        # --- ИЗМЕНЕНИЯ НАЧИНАЮТСЯ ЗДЕСЬ ---
+
+        # 1. Получаем ВСЕ данные
         owner_id = db.get_users_by_level("OWNER")[0]
         owner_entity = await event.client.get_entity(owner_id)
+        me = await event.client.get_me()
         sys_info = get_system_info()
-        
+        git_info = get_git_info()
+        prefix = db.get_setting("prefix", default=".")
+        try:
+            manifest = parse_manifest(Path(__file__).read_text(encoding='utf-8'))
+            version = manifest.get("version", "N/A")
+        except Exception:
+            version = "N/A"
+
+        # 2. Создаем полный словарь замен
         text_replacements = {
             "{owner}": f"{owner_entity.first_name}",
+            "{me}": me.first_name or "User",
             "{uptime}": get_uptime(),
             "{cpu}": f"{sys_info['cpu']:.1f} %",
             "{ram}": f"{sys_info['ram']:.2f} MB",
             "{os}": sys_info['os_name'],
+            "{prefix}": prefix,
+            "{version}": version,
+            "{branch}": git_info['branch'],
+            "{commit}": git_info['commit_sha'],
+            "{status}": git_info['status'],
         }
+        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         emoji_replacements = {}
         static_emojis = _get_static_emojis()
         for key, details in static_emojis.items():
             emoji_replacements[f"{{emoji:{key.upper()}}}"] = details
-        
+
         emoji_replacements["{emoji:os_emoji}"] = sys_info['os_emoji']
-        
+
         contains_text_ph = any(ph in original_text for ph in text_replacements.keys())
         contains_emoji_ph = any(ph in original_text for ph in emoji_replacements.keys())
-        
+
         entities = reconstruct_entities(custom_info.get('entities') or [])
         text = original_text
 
         if contains_text_ph or contains_emoji_ph:
-            # Создаем карту: какие символы в каких entities находятся
-            # Формат: {char_index_utf16: [list of entities]}
+            # --- (Этот блок не менялся, он должен быть в файле) ---
             char_entity_map = {}
             for entity in entities:
                 for i in range(entity.offset, entity.offset + entity.length):
                     if i not in char_entity_map:
                         char_entity_map[i] = []
                     char_entity_map[i].append(entity)
-            
-            # Применяем замены и строим новый текст с отслеживанием позиций
+
             new_text = ""
             new_entities = []
-            entity_tracking = {}  # {old_entity_id: {'start': new_start, 'end': new_end}}
-            
-            i = 0  # позиция в оригинальном тексте (строка Python)
+            entity_tracking = {} 
+
+            i = 0 
             while i < len(text):
-                # Проверяем, начинается ли здесь плейсхолдер
                 replaced = False
-                
-                # Проверяем текстовые плейсхолдеры
+
                 for placeholder, value in text_replacements.items():
                     if text[i:i+len(placeholder)] == placeholder:
-                        # Получаем UTF-16 позицию ДО добавления
                         utf16_pos_before = len(new_text.encode('utf-16-le')) // 2
-                        
-                        # Добавляем замену
                         new_text += value
-                        
-                        # Запоминаем, какие entities были в этом диапазоне
                         old_utf16_pos = len(text[:i].encode('utf-16-le')) // 2
-                        old_utf16_end = len(text[:i+len(placeholder)].encode('utf-16-le')) // 2
-                        
-                        # Переносим entities, которые покрывали плейсхолдер
+
                         for entity in entities:
                             if entity.offset <= old_utf16_pos < entity.offset + entity.length:
                                 entity_id = id(entity)
@@ -762,20 +796,18 @@ async def profile_cmd(event):
                                     entity_tracking[entity_id] = {'start': utf16_pos_before, 'end': len(new_text.encode('utf-16-le')) // 2, 'entity': entity}
                                 else:
                                     entity_tracking[entity_id]['end'] = len(new_text.encode('utf-16-le')) // 2
-                        
+
                         i += len(placeholder)
                         replaced = True
                         break
-                
-                # Проверяем эмодзи плейсхолдеры
+
                 if not replaced:
                     for placeholder, details in emoji_replacements.items():
                         if text[i:i+len(placeholder)] == placeholder:
                             utf16_pos_before = len(new_text.encode('utf-16-le')) // 2
                             value = details['fallback']
                             new_text += value
-                            
-                            # Добавляем CustomEmoji если есть ID
+
                             if details.get('id', 0) != 0:
                                 new_len_utf16 = len(value.encode('utf-16-le')) // 2
                                 new_entities.append(
@@ -785,8 +817,7 @@ async def profile_cmd(event):
                                         document_id=details['id']
                                     )
                                 )
-                            
-                            # Переносим entities
+
                             old_utf16_pos = len(text[:i].encode('utf-16-le')) // 2
                             for entity in entities:
                                 if entity.offset <= old_utf16_pos < entity.offset + entity.length:
@@ -795,17 +826,15 @@ async def profile_cmd(event):
                                         entity_tracking[entity_id] = {'start': utf16_pos_before, 'end': len(new_text.encode('utf-16-le')) // 2, 'entity': entity}
                                     else:
                                         entity_tracking[entity_id]['end'] = len(new_text.encode('utf-16-le')) // 2
-                            
+
                             i += len(placeholder)
                             replaced = True
                             break
-                
-                # Если не заменили, просто копируем символ
+
                 if not replaced:
                     utf16_pos_before = len(new_text.encode('utf-16-le')) // 2
                     new_text += text[i]
-                    
-                    # Переносим entities для этого символа
+
                     old_utf16_pos = len(text[:i].encode('utf-16-le')) // 2
                     for entity in entities:
                         if entity.offset <= old_utf16_pos < entity.offset + entity.length:
@@ -814,15 +843,14 @@ async def profile_cmd(event):
                                 entity_tracking[entity_id] = {'start': utf16_pos_before, 'end': len(new_text.encode('utf-16-le')) // 2, 'entity': entity}
                             else:
                                 entity_tracking[entity_id]['end'] = len(new_text.encode('utf-16-le')) // 2
-                    
+
                     i += 1
-            
-            # Создаем новые entities на основе tracking
+
             for tracked in entity_tracking.values():
                 old_entity = tracked['entity']
                 new_length = tracked['end'] - tracked['start']
-                
-                if new_length > 0:  # Только если entity не пустая
+
+                if new_length > 0: 
                     if isinstance(old_entity, MessageEntityBlockquote):
                         new_entities.append(MessageEntityBlockquote(offset=tracked['start'], length=new_length))
                     elif isinstance(old_entity, MessageEntityBold):
@@ -839,22 +867,21 @@ async def profile_cmd(event):
                         new_entities.append(MessageEntityTextUrl(offset=tracked['start'], length=new_length, url=old_entity.url))
                     elif isinstance(old_entity, MessageEntityCustomEmoji):
                         new_entities.append(MessageEntityCustomEmoji(offset=tracked['start'], length=new_length, document_id=old_entity.document_id))
-            
+
             text = new_text
             entities = new_entities
-        
-        # Добавляем blockquote для всего текста ТОЛЬКО если его ещё нет
+
         has_blockquote = any(isinstance(e, MessageEntityBlockquote) for e in entities)
-        
+
         if not has_blockquote:
             text_len_utf16 = len(text.encode('utf-16-le')) // 2
             blockquote_entity = MessageEntityBlockquote(offset=0, length=text_len_utf16)
-            
+
             if entities:
                 entities.insert(0, blockquote_entity)
             else:
                 entities = [blockquote_entity]
-        
+
         media_pointer_str = db.get_setting("profile_media")
         media = None
         if media_pointer_str:
@@ -865,7 +892,7 @@ async def profile_cmd(event):
                     media = message_to_fetch.media
             except Exception:
                 db.set_setting("profile_media", "")
-        
+
         try:
             if media:
                 await event.client.send_file(
@@ -877,8 +904,6 @@ async def profile_cmd(event):
                 )
                 await event.delete()
             else:
-                # Используем build_and_edit с entities напрямую
-                # Это должно правильно обработать все entities
                 await event.edit(text, formatting_entities=entities, link_preview=False)
         except Exception as e:
             fallback_text = f"⚠️ Ошибка рендера:\n`{type(e).__name__}`\n\n{text}"
@@ -889,7 +914,7 @@ async def profile_cmd(event):
             else:
                 await event.edit(fallback_text, link_preview=False)
         return
-
+        
     event_deleted = False
     try:
         parts = await _build_info_parts(event.client, force_fallback=False)

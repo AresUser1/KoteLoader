@@ -3,7 +3,7 @@
 Модуль для проверки и установки обновлений для других модулей через интерактивное меню.
 
 <manifest>
-version: 1.0.4
+version: 1.0.5
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/updater.py
 author: Kote
 
@@ -51,12 +51,15 @@ async def check_for_updates():
                 continue
                 
             source_url = local_manifest["source"]
-            if not source_url: continue # Пропускаем, если нет source
+            if not source_url or source_url == "local": continue
             
             url_to_fetch = f"{source_url}?t={int(time.time())}"
             headers = {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
 
-            async with aiohttp.ClientSession() as session:
+            # --- ❗️ 2. ИЗМЕНЕНИЕ ЗДЕСЬ ❗️ ---
+            # trust_env=False говорит aiohttp ИГНОРИРОВАТЬ системные прокси (HTTP_PROXY)
+            async with aiohttp.ClientSession(trust_env=False) as session:
+            # ---
                 async with session.get(url_to_fetch, headers=headers) as response:
                     if response.status != 200: continue
                     remote_content = await response.text()
@@ -101,26 +104,22 @@ async def update_cmd(event):
     if not check_permission(event, min_level="TRUSTED"):
         return
         
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Парсим аргументы (модуль и ID чата для отчета) ❗️❗️❗️
     args = (event.pattern_match.group(1) or "").strip().split()
     if not args:
-        return # Ничего не передано
+        return
     
     module_to_update = args[0]
-    report_chat_id = event.chat_id # По умолчанию отвечаем туда, откуда пришла команда (в "Избранное" или в группу, если вызвано вручную)
+    report_chat_id = event.chat_id
     
     if len(args) > 1:
         try:
             report_chat_id = int(args[1])
         except ValueError:
-            pass # Если второй аргумент не число, игнорируем и отвечаем в текущий чат
+            pass
 
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Не редактируем, а отправляем сообщение в чат отчета ❗️❗️❗️
     try:
-        # Используем parse_mode="md", так как build_and_edit здесь не нужен
         message = await event.client.send_message(report_chat_id, f"**Обновляю `{module_to_update}`...**", parse_mode="md")
     except Exception as e:
-        # Если не удалось отправить в чат отчета (например, бота кикнули), сообщаем в "Избранное"
         await event.respond(f"**Не удалось отправить отчет об обновлении {module_to_update} в чат {report_chat_id}.**\nОшибка: `{e}`", parse_mode="md")
         return
     
@@ -133,7 +132,10 @@ async def update_cmd(event):
     try:
         url_to_fetch = f"{found['source']}?t={int(time.time())}"
         headers = {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
-        async with aiohttp.ClientSession() as session:
+        
+        # --- ❗️ 2. ИЗМЕНЕНИЕ ЗДЕСЬ (аналогично) ❗️ ---
+        async with aiohttp.ClientSession(trust_env=False) as session:
+        # ---
             async with session.get(url_to_fetch, headers=headers) as response:
                 remote_content = await response.text()
         
@@ -145,5 +147,4 @@ async def update_cmd(event):
         await message.edit(f"✅ **Модуль `{found['module_name']}` обновлен до версии {found['new_version']}!**", parse_mode="md")
         
     except Exception:
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: Отправляем ошибку в чат отчета ❗️❗️❗️
         await message.edit(f"**❌ Ошибка при обновлении `{module_to_update}`:**\n`{traceback.format_exc()}`", parse_mode="md")
