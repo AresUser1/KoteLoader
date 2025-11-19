@@ -74,10 +74,8 @@ def inline_handler(query_pattern: str, title: str, description: str = ""):
 def check_module_dependencies(module_name: str) -> dict:
     """
     Проверяет зависимости модуля без полной загрузки.
-    Возвращает dict со статусом.
     """
     try:
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: .lower() УБРАН ❗️❗️❗️
         importlib.import_module(f"modules.{module_name}")
         return {"status": "ok"}
     except (ImportError, ModuleNotFoundError) as e:
@@ -97,9 +95,6 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
         return {"status": "info", "message": f"Модуль {module_name} уже загружен."}
 
     try:
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
-        # module_name (например, 'Spammer.spam') УЖЕ имеет правильный регистр,
-        # так как он приходит из _find_module_by_name() в modules.py
         import_name = f"modules.{module_name}"
         
         if import_name in sys.modules:
@@ -119,20 +114,42 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
                 break
         search_target = module_instance if module_instance else imported_module
         
+        # Импорт БД для работы с алиасами
+        from utils import database as db
+
         for name, func in inspect.getmembers(search_target):
             if not (inspect.isfunction(func) or inspect.ismethod(func)):
                 continue
 
             if getattr(func, "_is_command", False):
                 command_name, handler_args, doc = func._command_name, func._command_kwargs, func._command_doc
+                
+                # 1. Регистрация основной команды
                 pattern_text = re.escape(PREFIX) + command_name + r"(?:\s+(.*))?$"
-                # ❗️❗️❗️ ИСПРАВЛЕНИЕ: Добавлен re.DOTALL, чтобы (.*) захватывал новые строки ❗️❗️❗️
                 handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
                 handler = events.NewMessage(**handler_args)
                 client.add_event_handler(func, handler)
                 registered_handlers.append((func, handler))
+                
                 if command_name not in COMMANDS_REGISTRY: COMMANDS_REGISTRY[command_name] = []
                 COMMANDS_REGISTRY[command_name].append({"module": module_name, "doc": doc or "Нет описания"})
+
+                # 2. --- НОВОЕ: Регистрация алиасов ---
+                try:
+                    aliases = db.get_aliases_by_command(command_name)
+                    for alias in aliases:
+                        alias_pattern_text = re.escape(PREFIX) + alias + r"(?:\s+(.*))?$"
+                        
+                        # Копируем аргументы для алиаса
+                        alias_handler_args = handler_args.copy()
+                        alias_handler_args["pattern"] = re.compile(alias_pattern_text, re.IGNORECASE | re.DOTALL)
+                        
+                        alias_handler = events.NewMessage(**alias_handler_args)
+                        client.add_event_handler(func, alias_handler)
+                        registered_handlers.append((func, alias_handler))
+                except Exception as e:
+                    print(f"Ошибка при загрузке алиаса для {command_name}: {e}")
+                # ------------------------------------
 
             if getattr(func, "_is_watcher", False):
                 handler_args = func._watcher_kwargs.copy()
@@ -160,7 +177,6 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
 
     except (ImportError, ModuleNotFoundError) as e:
         traceback.print_exc()
-        # Эта проверка все еще полезна, если пользователь введет имя с неверным регистром
         if "No module named" in str(e) and module_name.lower() != module_name:
              return {"status": "error", "message": f"Ошибка: {e}. Возможно, имя модуля должно быть в нижнем регистре: `{module_name.lower()}`"}
         return {"status": "error", "message": f"Ошибка при загрузке {module_name}:\n{e}"}
@@ -183,19 +199,16 @@ async def unload_module(client, module_name: str) -> dict:
             COMMANDS_REGISTRY[command] = [cmd for cmd in COMMANDS_REGISTRY[command] if cmd["module"] != module_name]
             if not COMMANDS_REGISTRY[command]: del COMMANDS_REGISTRY[command]
 
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
         for pattern in list(CALLBACK_REGISTRY):
             if CALLBACK_REGISTRY[pattern].__module__ == f"modules.{module_name}":
                 del CALLBACK_REGISTRY[pattern]
         
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
         for pattern in list(INLINE_HANDLERS_REGISTRY):
             if INLINE_HANDLERS_REGISTRY[pattern]["func"].__module__ == f"modules.{module_name}":
                 del INLINE_HANDLERS_REGISTRY[pattern]
 
         del client.modules[module_name]
 
-        # ❗️❗️❗️ ИЗМЕНЕНИЕ: УБРАНО .lower() ❗️❗️❗️
         for name in list(sys.modules):
             if name == f"modules.{module_name}" or name.startswith(f"modules.{module_name}."):
                 del sys.modules[name]
@@ -219,9 +232,7 @@ def get_all_modules() -> list[str]:
         if path.name.startswith("_"):
             continue
         
-        # 'modules/Spammer/spam.py' -> 'Spammer/spam'
         relative_path = path.relative_to(MODULES_DIR)
-        # 'Spammer/spam' -> ('Spammer', 'spam') -> 'Spammer.spam'
         import_path = ".".join(relative_path.with_suffix("").parts)
         all_modules.append(import_path)
         

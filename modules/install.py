@@ -1,6 +1,6 @@
 # modules/install.py
 """<manifest>
-version: 1.0.5
+version: 1.1.0
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
 
@@ -9,7 +9,7 @@ author: Kote
 • forceinstall <url> - Принудительно установить
 • upload - Установить из файла
 • forceupload - Принудительно установить из файла
-• remove <название> - Удалить модуль
+• delm <название> - Удалить модуль (бывшая .remove)
 • getm <название> - Получить файл модуля
 </manifest>"""
 
@@ -45,14 +45,12 @@ async def _install_from_py_url(event, url, force=False):
         async with aiohttp.ClientSession(trust_env=False) as session:
             async with session.get(url) as response:
                 if response.status != 200:
-                    # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
                     return await build_and_edit(event, f"**Ошибка скачивания: HTTP {response.status}**", parse_mode="md")
                 content = await response.text(encoding='utf-8')
         
         file_name = os.path.basename(urlparse(url).path)
         await process_and_install(event, file_name, content, source_url=url, force=force)
     except Exception as e:
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         await build_and_edit(event, f"**Критическая ошибка при установке:**\n`{e}`", parse_mode="md")
 
 async def _install_from_git_repo(event, url, force=False):
@@ -61,13 +59,11 @@ async def _install_from_git_repo(event, url, force=False):
     target_dir = MODULES_DIR / repo_name
     
     if target_dir.exists() and not force:
-        # Эта функция уже использует 'parts' (премиум-эмодзи), она была в порядке.
         return await build_and_edit(event, [
             {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
             {"text": " Пакет модулей (папка) с таким именем уже существует.", "entity": MessageEntityBold}
         ])
 
-    # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
     await build_and_edit(event, f"⚙️ **Начинаю клонирование репозитория `{repo_name}`...**", parse_mode="md")
     
     if target_dir.exists():
@@ -82,15 +78,12 @@ async def _install_from_git_repo(event, url, force=False):
 
     if process.returncode != 0:
         error_message = stderr.decode().strip() or stdout.decode().strip()
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         return await build_and_edit(event, f"❌ **Ошибка при клонировании:**\n`{error_message}`", parse_mode="md")
 
-    # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
     await build_and_edit(event, "✅ **Репозиторий успешно склонирован.**", parse_mode="md")
     
     req_path = target_dir / "requirements.txt"
     if req_path.exists():
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         await build_and_edit(event, "`requirements.txt`** найден, устанавливаю зависимости...**", parse_mode="md")
         pip_process = await asyncio.create_subprocess_shell(
             f"pip install -r {req_path}",
@@ -101,14 +94,12 @@ async def _install_from_git_repo(event, url, force=False):
 
         if pip_process.returncode != 0:
             error_message = pip_stderr.decode().strip() or pip_stdout.decode().strip()
-            # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
             return await build_and_edit(event, f"⚠️ **Ошибка при установке зависимостей:**\n`{error_message}`", parse_mode="md")
 
     found_modules = [p.stem for p in target_dir.rglob("*.py") if not p.name.startswith("_")]
     
     prefix = db.get_setting("prefix", default=".")
     if found_modules:
-        # Эта функция уже использует 'parts' (премиум-эмодзи), она была в порядке.
         await build_and_edit(event, [
             {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
             {"text": " Пакет модулей ", "entity": MessageEntityBold},
@@ -119,7 +110,6 @@ async def _install_from_git_repo(event, url, force=False):
             {"text": f"{prefix}load {repo_name}.{found_modules[0]}", "entity": MessageEntityCode}
         ])
     else:
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         await build_and_edit(event, f"⚠️ **Пакет `{repo_name}` установлен, но в нем не найдено исполняемых .py модулей.**", parse_mode="md")
 
 async def process_and_install(event, file_name, content, source_url=None, force=False):
@@ -127,7 +117,6 @@ async def process_and_install(event, file_name, content, source_url=None, force=
     prefix = db.get_setting("prefix", default=".")
     
     if not force:
-        # Эта функция использует 'parts' и премиум-эмодзи, она была в порядке.
         await build_and_edit(event, [
             {"text": "🛡️ "}, 
             {"text": "Анализирую код на безопасность...", "entity": MessageEntityBold}
@@ -172,7 +161,6 @@ async def process_and_install(event, file_name, content, source_url=None, force=
     module_path = MODULES_DIR / file_name
     
     if module_path.exists() and not force:
-        # Эта функция использует 'parts' и премиум-эмодзи, она была в порядке.
         return await build_and_edit(event, [
             {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
             {"text": " Модуль уже существует.", "entity": MessageEntityBold}
@@ -186,7 +174,6 @@ async def process_and_install(event, file_name, content, source_url=None, force=
     else:
         db.remove_module_config(module_name, "source_url")
 
-    # Эта функция использует 'parts' и премиум-эмодзи, она была в порядке.
     await build_and_edit(event, [
         {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
         {"text": " Модуль ", "entity": MessageEntityBold},
@@ -208,7 +195,6 @@ async def install_cmd(event, force=False):
     url = (event.pattern_match.group(1) or "").strip()
     
     if not url.startswith("http"):
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         return await build_and_edit(event, f"❌ **Укажите полный URL. Использование: {prefix}install <url>**", parse_mode="md")
 
     if url.endswith(".py"):
@@ -216,7 +202,6 @@ async def install_cmd(event, force=False):
     elif "github.com" in url:
         await _install_from_git_repo(event, url, force)
     else:
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         await build_and_edit(event, f"**Ссылка не распознана. Использование: {prefix}install <url>**", parse_mode="md")
 
 @register("forceinstall", incoming=True)
@@ -234,15 +219,12 @@ async def upload_module(event, force=False):
     message_with_file = reply if reply and reply.media else event.message
     
     if not message_with_file or not message_with_file.file:
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown (ВАШ ПРИМЕР)
         return await build_and_edit(event, "**Отправьте .py файл или ответьте на него командой.**", parse_mode="md")
 
     file_name = getattr(message_with_file.file, 'name', "module.py")
     if not file_name.endswith(".py"): 
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         return await build_and_edit(event, "**Файл должен быть .py**", parse_mode="md")
 
-    # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
     await build_and_edit(event, "🔄 **Читаю файл...**", parse_mode="md")
     
     content = (await message_with_file.download_media(bytes)).decode('utf-8', 'ignore')
@@ -261,7 +243,6 @@ async def get_module_cmd(event):
 
     module_name = event.pattern_match.group(1)
     if not module_name:
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         return await build_and_edit(event, "**Укажите имя модуля.**", parse_mode="md")
 
     module_path = None
@@ -270,12 +251,10 @@ async def get_module_cmd(event):
         module_path = potential_paths[0]
 
     if not module_path or not module_path.exists():
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         return await build_and_edit(event, f"❌ **Модуль `{module_name}` не найден.**", parse_mode="md")
 
     prefix = db.get_setting("prefix", default=".")
     
-    # Эта функция использует 'parts' и премиум-эмодзи, она была в порядке.
     parts = [
         {"text": "📁", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": FOLDER_EMOJI_ID}},
         {"text": " Файл модуля ", "entity": MessageEntityBold},
@@ -299,7 +278,7 @@ async def get_module_cmd(event):
     if event.out:
         await event.delete()
 
-@register("remove", incoming=True)
+@register("delm", incoming=True)
 async def remove_module(event):
     """Удаляет модуль (файл) или пакет модулей (папку)."""
     if not check_permission(event, min_level="TRUSTED"):
@@ -307,7 +286,6 @@ async def remove_module(event):
         
     name_to_remove = (event.pattern_match.group(1) or "").strip()
     if not name_to_remove:
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         return await build_and_edit(event, "**Укажите имя модуля или пакета для удаления.**", parse_mode="md")
 
     path_to_remove = MODULES_DIR / name_to_remove.replace(".", os.sep)
@@ -315,7 +293,6 @@ async def remove_module(event):
         path_to_remove = (MODULES_DIR / name_to_remove.replace(".", os.sep)).with_suffix(".py")
 
     if not path_to_remove.exists():
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         return await build_and_edit(event, f"❌ **Ресурс `{name_to_remove}` не найден.**", parse_mode="md")
     
     try:
@@ -335,9 +312,7 @@ async def remove_module(event):
             path_to_remove.unlink()
             db.clear_module(module_name)
             
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         await build_and_edit(event, f"✅ **Ресурс `{name_to_remove}` успешно удален!**", parse_mode="md")
         
     except Exception as e:
-        # ❗️ ИСПРАВЛЕНИЕ: Конвертировано в Markdown
         await build_and_edit(event, f"❌ **Ошибка при удалении:**\n`{traceback.format_exc()}`", parse_mode="md")

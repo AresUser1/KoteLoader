@@ -12,7 +12,6 @@ def db_connect():
     """Устанавливает соединение с базой данных в режиме автокоммита."""
     global connection
     if connection is None:
-        # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: isolation_level=None включает автокоммит.
         connection = sqlite3.connect(DB_FILE, isolation_level=None)
         connection.row_factory = sqlite3.Row
     return connection
@@ -24,6 +23,17 @@ def init_hidden_modules_table():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS hidden_modules (
             module_name TEXT PRIMARY KEY
+        )
+    """)
+
+def init_aliases_table():
+    """Создает таблицу алиасов, если она не существует."""
+    cursor = connection.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS aliases (
+            alias TEXT PRIMARY KEY, 
+            real_command TEXT, 
+            module_name TEXT
         )
     """)
 
@@ -53,8 +63,11 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_module_storage_lookup 
         ON module_storage(module_name, storage_key, storage_type, user_id, chat_id)
     """)
-    # Инициализируем новую таблицу для скрытых модулей
+    
+    # Инициализация таблиц
     init_hidden_modules_table()
+    init_aliases_table() # <--- НОВОЕ
+    
     print("База данных готова.")
 
 
@@ -98,20 +111,20 @@ def get_users_by_level(level: str) -> list:
     cursor.execute("SELECT user_id FROM users WHERE level = ?", (level,))
     return [row['user_id'] for row in cursor.fetchall()]
 
+# --- Работа с данными модулей ---
+
 def _store_module_data(module_name: str, key: str, value: Any, storage_type: str = 'data', user_id: int = 0,
                        chat_id: int = 0):
     """Внутренняя функция для сохранения данных модуля с корректным обновлением."""
     cursor = connection.cursor()
     value_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
 
-    # Сначала пытаемся обновить существующую запись
     cursor.execute("""
         UPDATE module_storage 
         SET storage_value = ?, updated_at = CURRENT_TIMESTAMP
         WHERE module_name = ? AND storage_key = ? AND storage_type = ? AND user_id = ? AND chat_id = ?
     """, (value_str, module_name, key, storage_type, user_id, chat_id))
 
-    # Если ни одна строка не была обновлена (т.е. записи не было), создаём новую
     if cursor.rowcount == 0:
         cursor.execute("""
             INSERT INTO module_storage 
@@ -137,27 +150,22 @@ def _get_module_data(module_name: str, key: str, storage_type: str = 'data', def
 
 
 def set_module_config(module_name: str, config_key: str, config_value: Any, user_id: int = 0):
-    """Устанавливает конфигурацию модуля."""
     _store_module_data(module_name, config_key, config_value, 'config', user_id, 0)
 
 
 def get_module_config(module_name: str, config_key: str, default: Any = None, user_id: int = 0) -> Any:
-    """Получает конфигурацию модуля."""
     return _get_module_data(module_name, config_key, 'config', default, user_id, 0)
 
 
 def set_module_data(module_name: str, data_key: str, data_value: Any, user_id: int = 0, chat_id: int = 0):
-    """Сохраняет данные модуля."""
     _store_module_data(module_name, data_key, data_value, 'data', user_id, chat_id)
 
 
 def get_module_data(module_name: str, data_key: str, default: Any = None, user_id: int = 0, chat_id: int = 0) -> Any:
-    """Получает данные модуля."""
     return _get_module_data(module_name, data_key, 'data', default, user_id, chat_id)
 
 
 def get_all_module_configs(module_name: str, user_id: int = 0) -> Dict[str, Any]:
-    """Получает все конфигурации модуля."""
     cursor = connection.cursor()
     cursor.execute("""
         SELECT storage_key, storage_value FROM module_storage 
@@ -173,7 +181,6 @@ def get_all_module_configs(module_name: str, user_id: int = 0) -> Dict[str, Any]
 
 
 def get_all_module_data(module_name: str, user_id: int = 0, chat_id: int = 0) -> Dict[str, Any]:
-    """Получает все данные модуля."""
     cursor = connection.cursor()
     cursor.execute("""
         SELECT storage_key, storage_value FROM module_storage 
@@ -189,7 +196,6 @@ def get_all_module_data(module_name: str, user_id: int = 0, chat_id: int = 0) ->
 
 
 def remove_module_config(module_name: str, config_key: str = None, user_id: int = 0):
-    """Удаляет конфигурацию модуля."""
     cursor = connection.cursor()
     if config_key:
         cursor.execute(
@@ -201,7 +207,6 @@ def remove_module_config(module_name: str, config_key: str = None, user_id: int 
 
 
 def remove_module_data(module_name: str, data_key: str = None, user_id: int = 0, chat_id: int = 0):
-    """Удаляет данные модуля."""
     cursor = connection.cursor()
     if data_key:
         cursor.execute(
@@ -253,22 +258,45 @@ def get_all_module_sources() -> Dict[str, str]:
 
 
 def hide_module(module_name: str):
-    """Добавляет модуль в список скрытых."""
     cursor = connection.cursor()
     cursor.execute("INSERT OR IGNORE INTO hidden_modules (module_name) VALUES (?)", (module_name,))
 
 
 def unhide_module(module_name: str):
-    """Удаляет модуль из списка скрытых."""
     cursor = connection.cursor()
     cursor.execute("DELETE FROM hidden_modules WHERE module_name = ?", (module_name,))
 
 
 def get_hidden_modules() -> list:
-    """Возвращает список всех скрытых модулей."""
     cursor = connection.cursor()
     cursor.execute("SELECT module_name FROM hidden_modules")
     return [row['module_name'] for row in cursor.fetchall()]
+
+
+# --- ФУНКЦИИ АЛИАСОВ (НОВЫЕ) ---
+
+def add_alias(alias: str, real_command: str, module_name: str):
+    """Добавляет новый алиас."""
+    cursor = connection.cursor()
+    cursor.execute("INSERT OR REPLACE INTO aliases (alias, real_command, module_name) VALUES (?, ?, ?)", 
+                   (alias, real_command, module_name))
+
+def remove_alias(alias: str):
+    """Удаляет алиас."""
+    cursor = connection.cursor()
+    cursor.execute("DELETE FROM aliases WHERE alias = ?", (alias,))
+
+def get_aliases_by_command(real_command: str) -> list:
+    """Возвращает список алиасов для конкретной команды."""
+    cursor = connection.cursor()
+    cursor.execute("SELECT alias FROM aliases WHERE real_command = ?", (real_command,))
+    return [row['alias'] for row in cursor.fetchall()]
+
+def get_all_aliases() -> list:
+    """Возвращает все алиасы."""
+    cursor = connection.cursor()
+    cursor.execute("SELECT * FROM aliases")
+    return cursor.fetchall()
 
 
 def close_db():
