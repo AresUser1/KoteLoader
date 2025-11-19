@@ -26,6 +26,7 @@ state.json
 backups/
 modules_info.json
 command.json
+twins.json
 
 # Файлы бэкапов
 *.bak

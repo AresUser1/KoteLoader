@@ -1,4 +1,4 @@
-#main.py
+# main.py
 import asyncio
 import logging
 import re
@@ -99,12 +99,33 @@ async def all_messages_handler(event):
 async def start_clients():
     config = ConfigParser()
     config_file = "config.ini"
+    
+    config.read(config_file, encoding='utf-8')
+    
+    if not os.path.exists(config_file) or not config.has_section("telethon"):
+        print(f"Файл конфигурации '{config_file}' не найден или некорректен. Приступим к созданию...")
+        print("Пожалуйста, введите данные вашего Telegram-аккаунта для входа.")
+        api_id = input("Введите ваш api_id: ")
+        api_hash = input("Введите ваш api_hash: ")
 
-    if not os.path.exists(config_file):
-        print("Файл config.ini не найден. Запустите скрипт настройки.")
+        session_name = ""
+        while not session_name.strip():
+            session_name = input("Введите имя сессии (например, my_account): ")
+            if not session_name.strip():
+                print("❌ Имя сессии не может быть пустым.")
+
+        bot_token = await create_new_bot_with_botfather(api_id, api_hash, session_name)
+        if not bot_token:
+            print("\nНе удалось автоматически создать бота. Завершение работы.")
+            return None, None
+            
+        config['telethon'] = {'api_id': api_id, 'api_hash': api_hash, 'session_name': session_name, 'bot_token': bot_token}
+        with open(config_file, 'w', encoding='utf-8') as f:
+            config.write(f)
+        print(f"\n✅ Конфигурация успешно сохранена в '{config_file}'.")
+        print("Пожалуйста, перезапустите бота командой: python3 main.py")
         return None, None
 
-    config.read(config_file, encoding='utf-8')
     api_id = config.getint("telethon", "api_id")
     api_hash = config.get("telethon", "api_hash")
     session_name = config.get("telethon", "session_name", fallback=None)
