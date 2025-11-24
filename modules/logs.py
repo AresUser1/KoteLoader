@@ -1,13 +1,14 @@
 # modules/logs.py
-"""<manifest>
-version: 1.0.1
+"""
+<manifest>
+version: 1.0.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/logs.py
 author: Kote
+</manifest>
 
-Команды:
-• logs [фильтры] - Показать логи (-n, -l, -f)
-• debug <on|off> - Управлять режимом отладки
-</manifest>"""
+Модуль для просмотра и управления логами бота.
+Позволяет читать лог-файл с фильтрацией и управлять уровнем отладки.
+"""
 
 import logging
 from pathlib import Path
@@ -17,7 +18,6 @@ from utils.message_builder import build_and_edit
 from utils.security import check_permission
 from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold, MessageEntityCode
 
-# --- Премиум Эмодзи ---
 LOGS_EMOJI_ID = 5256230583717079814
 SUCCESS_EMOJI_ID = 5255813619702049821
 INFO_EMOJI_ID = 5879813604068298387
@@ -31,7 +31,6 @@ LOG_FILE = Path(__file__).parent.parent / "kote_loader.log"
 MAX_LOG_CHARS = 4000
 
 def parse_log_line(line: str) -> list:
-    """Преобразует строку лога в список частей для build_and_edit с премиум-эмодзи."""
     log_levels = {
         "CRITICAL": CRITICAL_EMOJI_ID, "ERROR": ERROR_EMOJI_ID,
         "WARNING": WARNING_EMOJI_ID, "INFO": INFO_EMOJI_ID, "DEBUG": DEBUG_EMOJI_ID,
@@ -49,7 +48,10 @@ def parse_log_line(line: str) -> list:
 
 @register("logs", incoming=True)
 async def logs_cmd(event):
-    """Показывает последние записи из лог-файла с фильтрами."""
+    """Показывает последние записи из лог-файла.
+    
+    Usage: {prefix}logs [-n число] [-l уровень] [-f текст]
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -113,7 +115,10 @@ async def logs_cmd(event):
 
 @register("debug", incoming=True)
 async def debug_cmd(event):
-    """Включает или выключает режим отладки."""
+    """Включает или выключает режим отладки.
+    
+    Usage: {prefix}debug <on|off>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 

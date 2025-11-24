@@ -1,21 +1,13 @@
 # modules/modules.py
-"""Управление модулями: загрузка, выгрузка, перезагрузка и просмотр информации.
-
+"""
 <manifest>
-version: 1.0.7
+version: 1.0.8
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/modules.py
 author: Kote
+</manifest>
 
-Команды:
-• modules [поиск] - Показать список модулей
-• minfo <название> - Информация о модуле
-• load <название> - Загрузить модуль
-• unload <название> - Выгрузить модуль
-• reload <название> - Перезагрузить модуль
-• setmodemoji <ключ> <эмодзи> | <fallback> - Установить эмодзи
-• delmodemoji <ключ> - Сбросить эмодзи
-• modemojis - Показать эмодзи
-</manifest>"""
+Управление модулями: загрузка, выгрузка, перезагрузка и просмотр информации.
+"""
 
 import os
 import shutil
@@ -37,7 +29,6 @@ BACKUPS_DIR = Path(__file__).parent.parent / "backups"
 SYSTEM_MODULE_NAMES = ["admin", "help", "fun", "install", "modules", "updater", "logs", "ping", "exec", "profile", "config", "git_manager", "core_updater"]
 
 def _get_static_emojis() -> dict:
-    """Загружает кастомные СТАТИЧНЫЕ эмодзи для modules.py из БД."""
     DEFAULT_STATIC_EMOJIS = {
         "PACKAGE":    {"id": 5256094480498436162, "fallback": "📦"},
         "SETTINGS":   {"id": 5253952855185829086, "fallback": "⚙️"},
@@ -60,9 +51,6 @@ def _get_static_emojis() -> dict:
     return {**DEFAULT_STATIC_EMOJIS, **custom_emojis}
 
 def _build_emoji_part(emoji_details: dict) -> dict:
-    """
-    Умный сборщик. Всегда возвращает fallback и накладывает ID, если он есть.
-    """
     part = {"text": emoji_details.get('fallback', '❔')}
     if emoji_details.get('id') != 0:
         part["entity"] = MessageEntityCustomEmoji
@@ -70,39 +58,31 @@ def _build_emoji_part(emoji_details: dict) -> dict:
     return part
 
 def get_static_mod_emoji_data(key: str) -> dict:
-    """Извлекает данные эмодзи (ID и fallback) по ключу. Использовалась в командах ниже."""
     all_emojis = _get_static_emojis()
     return all_emojis.get(key.upper(), {"id": 0, "fallback": "?"})
 
-# ❗️❗️❗️ НОВАЯ ФУНКЦИЯ: Поиск модуля без учета регистра ❗️❗️❗️
 def _find_module_by_name(user_input: str) -> str | None:
-    """Находит реальное имя модуля, игнорируя регистр."""
     if not user_input:
         return None
     
     all_modules = get_all_modules()
     
-    # 1. Сначала ищем точное совпадение
     if user_input in all_modules:
         return user_input
         
-    # 2. Если не нашли, ищем без учета регистра
     user_input_lower = user_input.lower()
     for mod_name in all_modules:
         if mod_name.lower() == user_input_lower:
             return mod_name
             
-    # 3. Если не нашли, ищем без учета регистра и подчеркиваний
     user_input_compare = user_input_lower.replace("_", "")
     for mod_name in all_modules:
         if mod_name.lower().replace("_", "") == user_input_compare:
             return mod_name
             
-    # 4. Ничего не найдено
     return None
 
 async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
-    """Парсер аргументов для команд .setmodemoji"""
     prefix = db.get_setting('prefix', '.')
     args_str = event.pattern_match.group(1)
     fallback_char = "❔"
@@ -130,15 +110,10 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
     
     if event.entities:
         for entity in event.entities:
-            # Смещение должно начинаться после префикса, команды и ключа
             try:
-                # Находим начало аргументов
                 args_start_index = event.text.find(args_str)
-                # Вычисляем минимальное смещение для эмодзи:
-                # (префикс + команда + пробел) + (ключ + пробел)
                 min_emoji_offset = event.text.find(key) + len(key)
             except:
-                # Запасной вариант, если не удалось найти
                 min_emoji_offset = len(prefix) + len(cmd_name) + len(key) + 2 
 
             if isinstance(entity, MessageEntityCustomEmoji) and entity.offset >= min_emoji_offset:
@@ -161,7 +136,6 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
         return {"error": [{"text": "❌ Укажите ID или Премиум-Эмодзи"}]}
     
     if fallback_char == "❔" and emoji_id != 0:
-         # Ищем fallback в первом символе (обычно это сам эмодзи, если он был введен)
          fallback_char = args_before_pipe.split(maxsplit=2)[-1][0] if len(args_before_pipe.split()) > 1 else '✨'
          if fallback_char == "❔" or fallback_char.isdigit():
              return {"error": [{"text": "❌ Укажите fallback-символ после |"}]}
@@ -170,7 +144,10 @@ async def _parse_emoji_args(event, cmd_name: str, example_key: str) -> dict:
 
 @register("setmodemoji", incoming=True)
 async def setmodemoji_cmd(event):
-    """Устанавливает кастомный статичный эмодзи для модуля modules."""
+    """Устанавливает кастомный статичный эмодзи.
+    
+    Usage: {prefix}setmodemoji <ключ> <эмодзи> | <fallback>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -190,7 +167,10 @@ async def setmodemoji_cmd(event):
 
 @register("delmodemoji", incoming=True)
 async def delmodemoji_cmd(event):
-    """Сбрасывает статичный эмодзи для модуля modules."""
+    """Сбрасывает статичный эмодзи.
+    
+    Usage: {prefix}delmodemoji <ключ>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -207,7 +187,10 @@ async def delmodemoji_cmd(event):
 
 @register("modemojis", incoming=True)
 async def modemojis_cmd(event):
-    """Показывает текущие настройки статичных эмоdзи для modules.py."""
+    """Показывает текущие настройки эмодзи.
+    
+    Usage: {prefix}modemojis
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -231,7 +214,10 @@ async def modemojis_cmd(event):
 
 @register("modules", incoming=True)
 async def list_modules(event):
-    """Показывает детальный список всех модулей."""
+    """Показывает детальный список всех модулей.
+    
+    Usage: {prefix}modules [поиск]
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -306,7 +292,10 @@ async def list_modules(event):
 
 @register("minfo", incoming=True)
 async def module_info(event):
-    """Показывает подробную информацию о модуле."""
+    """Показывает подробную информацию о модуле.
+    
+    Usage: {prefix}minfo <название>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -321,7 +310,6 @@ async def module_info(event):
             {"text": f"{prefix}minfo <module_name>", "entity": MessageEntityCode}
         ])
     
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Используем поиск без учета регистра ❗️❗️❗️
     module_name_input = args[1].strip()
     module_name = _find_module_by_name(module_name_input)
     
@@ -429,14 +417,12 @@ async def _handle_module_command(event, action: str):
     
     emojis = _get_static_emojis()
     
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Исправлено сообщение об ошибке (убран <b>) ❗️❗️❗️
     if not module_name_input:
         return await build_and_edit(event, [
             {"text": f"Укажите имя модуля для {action}а.", "entity": MessageEntityBold},
             {"text": f"\nИспользование: {prefix}{action} <module>", "entity": MessageEntityCode}
         ])
     
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Используем поиск без учета регистра ❗️❗️❗️
     module_name = _find_module_by_name(module_name_input)
     
     if not module_name:
@@ -454,7 +440,6 @@ async def _handle_module_command(event, action: str):
     
     op = action_map[action]
     
-    # Сообщение "Загружаю..."
     await build_and_edit(event, [
         _build_emoji_part(op["emoji"]),
         {"text": f" {op['verb']} модуль ", "entity": MessageEntityBold},
@@ -462,7 +447,6 @@ async def _handle_module_command(event, action: str):
         {"text": "...", "entity": MessageEntityBold}
     ])
     
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Обработка "чистого" dict-ответа от loader.py ❗️❗️❗️
     try:
         if action == "reload":
             result = await op["func"](event.client, module_name, event.chat_id)
@@ -478,7 +462,6 @@ async def _handle_module_command(event, action: str):
         else: # status == "error"
             parts.append(_build_emoji_part(emojis['ERROR']))
             parts.append({"text": " Ошибка: ", "entity": MessageEntityBold})
-            # Оборачиваем сообщение об ошибке в `code`
             parts.append({"text": result['message'], "entity": MessageEntityCode})
             
         await build_and_edit(event, parts, link_preview=False)
@@ -492,17 +475,26 @@ async def _handle_module_command(event, action: str):
 
 @register("load", incoming=True)
 async def load_cmd(event):
-    """Загружает указанный модуль."""
+    """Загружает модуль.
+    
+    Usage: {prefix}load <название>
+    """
     await _handle_module_command(event, "load")
 
 @register("unload", incoming=True)
 async def unload_cmd(event):
-    """Выгружает указанный модуль."""
+    """Выгружает модуль.
+    
+    Usage: {prefix}unload <название>
+    """
     await _handle_module_command(event, "unload")
 
 @register("reload", incoming=True)
 async def reload_cmd(event):
-    """Перезагружает указанный модуль."""
+    """Перезагружает модуль.
+    
+    Usage: {prefix}reload <название>
+    """
     await _handle_module_command(event, "reload")
 
 def get_module_size(module_name):

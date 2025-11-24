@@ -1,21 +1,18 @@
 # modules/core_updater.py
-"""<manifest>
-version: 1.0.6
+"""
+<manifest>
+version: 1.0.7
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/core_updater.py
 author: Kote
+</manifest>
 
-Модуль для полного обновления ядра KoteLoader из Git. 
-Перезаписывает все локальные изменения. 
-URL репозитория встроен в код.
-
-Команды:
-• updatecore - Выполнить полное обновление ядра и перезагрузиться.
-</manifest>"""
+Модуль для полного обновления ядра KoteLoader из Git.
+Перезаписывает все локальные изменения в системных файлах.
+"""
 
 import asyncio
 import traceback
 import time
-# ❗️ 1. Импортируем os и sys
 import os
 import sys
 from core import register
@@ -26,8 +23,10 @@ from telethon.tl.types import MessageEntityBold, MessageEntityCode
 
 @register("updatecore", incoming=True)
 async def update_core_cmd(event):
-    """Принудительно обновляет ядро бота из Git и перезагружается."""
+    """Принудительно обновляет ядро бота из Git и перезагружается.
     
+    Usage: {prefix}updatecore [confirm]
+    """
     if not check_permission(event, min_level="OWNER"):
         return
 
@@ -106,10 +105,7 @@ async def update_core_cmd(event):
         db.set_setting("restart_report_chat_id", str(event.chat_id))
         db.set_setting("restart_start_time", str(time.time()))
         
-        # --- ❗️ 2. ИСПРАВЛЕНИЕ ЗДЕСЬ ❗️ ---
-        # Прямой вызов перезапуска
         os.execv(sys.executable, [sys.executable] + sys.argv)
-        # ---
         
     except Exception as e:
         await build_and_edit(event, [

@@ -1,13 +1,13 @@
 # modules/config.py
-"""<manifest>
-version: 1.0.1
+"""
+<manifest>
+version: 1.0.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/config.py
 author: Kote
+</manifest>
 
-Команды:
-• setpfp <ответ на медиа> - Установить медиа для профиля
-• setrepo <url> - Установить ссылку на репозиторий
-</manifest>"""
+Управление конфигурацией (аватарка профиля, репозиторий).
+"""
 
 import json
 from core import register
@@ -18,7 +18,10 @@ from telethon.tl.types import MessageEntityBold, MessageEntityCode
 
 @register("setpfp", incoming=True)
 async def set_profile_pic(event):
-    """Копирует медиа в 'Избранное' и сохраняет ссылку для команды .info."""
+    """Копирует медиа в 'Избранное' и сохраняет ссылку для команды .info.
+    
+    Usage: {prefix}setpfp (в ответ на медиа)
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -46,7 +49,10 @@ async def set_profile_pic(event):
 
 @register("setrepo", incoming=True)
 async def set_repo_url(event):
-    """Устанавливает URL репозитория для .info."""
+    """Устанавливает URL репозитория для .info.
+    
+    Usage: {prefix}setrepo <url>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 

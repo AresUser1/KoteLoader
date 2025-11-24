@@ -1,13 +1,13 @@
 # modules/power.py
-"""<manifest>
-version: 1.0.1
+"""
+<manifest>
+version: 1.0.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/power.py
 author: Kote
+</manifest>
 
-Команды:
-• on - Включить юзербота
-• off - Выключить юзербота
-</manifest>"""
+Управление питанием юзербота (включение/выключение режима обработки команд).
+"""
 
 from utils import database as db
 from utils.message_builder import build_and_edit
@@ -15,14 +15,16 @@ from core import register
 from utils.security import check_permission
 from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityCustomEmoji
 
-# --- Премиум Эмодзи ---
 SUCCESS_EMOJI_ID = 5118861066981344121
 POWER_ON_ID = 5818711397860642669
 POWER_OFF_ID = 5818665600624365278
 
 @register("on", incoming=True)
 async def bot_on_cmd(event):
-    """Включает юзербота."""
+    """Включает юзербота.
+    
+    Usage: {prefix}on
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -34,7 +36,10 @@ async def bot_on_cmd(event):
 
 @register("off", incoming=True)
 async def bot_off_cmd(event):
-    """Выключает юзербота."""
+    """Выключает юзербота.
+    
+    Usage: {prefix}off
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 

@@ -1,17 +1,13 @@
 # modules/install.py
-"""<manifest>
-version: 1.1.0
+"""
+<manifest>
+version: 1.1.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
+</manifest>
 
-Команды:
-• install <url> - Установить модуль по ссылке
-• forceinstall <url> - Принудительно установить
-• upload - Установить из файла
-• forceupload - Принудительно установить из файла
-• delm <название> - Удалить модуль (бывшая .remove)
-• getm <название> - Получить файл модуля
-</manifest>"""
+Управление модулями: установка (по ссылке/файлу), удаление и получение исходного кода.
+"""
 
 import os
 import aiohttp
@@ -27,7 +23,6 @@ from utils.message_builder import build_and_edit, build_message
 from utils.security import scan_code, check_permission
 from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold, MessageEntityCode
 
-# --- ПРЕМИУМ ЭМОДЗИ ---
 SUCCESS_EMOJI_ID = 5255813619702049821
 FOLDER_EMOJI_ID = 5256113064821926998
 TRASH_EMOJI_ID = 5255831443816327915
@@ -40,7 +35,6 @@ SECURITY_WARN_ID = 5881702736843511327
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 
 async def _install_from_py_url(event, url, force=False):
-    """Логика для установки из прямой ссылки на .py файл."""
     try:
         async with aiohttp.ClientSession(trust_env=False) as session:
             async with session.get(url) as response:
@@ -54,7 +48,6 @@ async def _install_from_py_url(event, url, force=False):
         await build_and_edit(event, f"**Критическая ошибка при установке:**\n`{e}`", parse_mode="md")
 
 async def _install_from_git_repo(event, url, force=False):
-    """Логика для установки из GitHub репозитория."""
     repo_name = url.split("/")[-1].replace(".git", "")
     target_dir = MODULES_DIR / repo_name
     
@@ -113,7 +106,6 @@ async def _install_from_git_repo(event, url, force=False):
         await build_and_edit(event, f"⚠️ **Пакет `{repo_name}` установлен, но в нем не найдено исполняемых .py модулей.**", parse_mode="md")
 
 async def process_and_install(event, file_name, content, source_url=None, force=False):
-    """Общая логика для проверки и установки ОДИНОЧНОГО модуля."""
     prefix = db.get_setting("prefix", default=".")
     
     if not force:
@@ -187,7 +179,10 @@ async def process_and_install(event, file_name, content, source_url=None, force=
 
 @register("install", incoming=True)
 async def install_cmd(event, force=False):
-    """Главный обработчик команды install."""
+    """Установить модуль по ссылке.
+    
+    Usage: {prefix}install <url>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
     
@@ -206,12 +201,18 @@ async def install_cmd(event, force=False):
 
 @register("forceinstall", incoming=True)
 async def force_install_cmd(event):
-    """Принудительная установка без проверки безопасности."""
+    """Принудительная установка по ссылке.
+    
+    Usage: {prefix}forceinstall <url>
+    """
     await install_cmd(event, force=True)
 
 @register("upload", incoming=True)
 async def upload_module(event, force=False):
-    """Установка модуля из присланного файла."""
+    """Установка модуля из файла.
+    
+    Usage: {prefix}upload (в ответ на файл)
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -232,12 +233,18 @@ async def upload_module(event, force=False):
 
 @register("forceupload", incoming=True)
 async def force_upload_module(event):
-    """Принудительная установка из файла без проверки безопасности."""
+    """Принудительная установка из файла.
+    
+    Usage: {prefix}forceupload (в ответ на файл)
+    """
     await upload_module(event, force=True)
 
 @register("getm", incoming=True)
 async def get_module_cmd(event):
-    """Отправляет файл модуля в чат."""
+    """Получить файл модуля.
+    
+    Usage: {prefix}getm <название>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -280,7 +287,10 @@ async def get_module_cmd(event):
 
 @register("delm", incoming=True)
 async def remove_module(event):
-    """Удаляет модуль (файл) или пакет модулей (папку)."""
+    """Удалить модуль.
+    
+    Usage: {prefix}delm <название>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
@@ -298,13 +308,11 @@ async def remove_module(event):
     try:
         if path_to_remove.is_dir():
             shutil.rmtree(path_to_remove)
-            # При удалении пакета (папки) нужно очистить из БД все модули ВНУТРИ него.
             all_module_names_in_db = db.get_modules_stats().keys()
             for mod_name in all_module_names_in_db:
                 if mod_name.startswith(name_to_remove + "."):
                     db.clear_module(mod_name)
         else:
-            # Это одиночный файл.
             from utils.loader import unload_module
             module_name = ".".join(path_to_remove.relative_to(MODULES_DIR).with_suffix("").parts)
             if hasattr(event.client, 'modules') and module_name in event.client.modules:

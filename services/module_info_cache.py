@@ -3,55 +3,70 @@ import json
 import importlib.util
 from pathlib import Path
 import re
+import ast
 
 BASE_DIR = Path(__file__).parent.parent
 MODULES_DIR = BASE_DIR / "modules"
 MODULES_INFO_FILE = BASE_DIR / "modules_info.json"
 
+def extract_docstring(content: str) -> str:
+    """
+    Безопасно извлекает docstring из исходного кода Python,
+    игнорируя импорты и сам код.
+    """
+    try:
+        tree = ast.parse(content)
+        return ast.get_docstring(tree) or ""
+    except Exception:
+        return ""
+
 def parse_manifest(content: str) -> dict:
-    """Парсит текстовый манифест в формате ключ: значение."""
-    match = re.search(r"<manifest>(.*?)</manifest>", content, re.DOTALL)
-    if not match:
-        return {"version": "N/A", "source": None, "author": "Неизвестно", "description": "Описание отсутствует."}
+    """
+    Парсит содержимое файла модуля.
+    1. Извлекает Docstring.
+    2. Находит внутри него блок <manifest> для метаданных.
+    3. Удаляет блок <manifest> из Docstring, чтобы получить чистое описание.
+    """
+    # 1. Получаем весь текст docstring
+    docstring = extract_docstring(content)
     
-    manifest_text = match.group(1).strip()
-    lines = manifest_text.split("\n")
-    
-    meta = {}
-    description_start = 0
-    
-    for i, line in enumerate(lines):
-        if ":" in line and not line.strip().startswith("•"):  # metadata
-            key, value = line.split(":", 1)
-            meta[key.strip().lower()] = value.strip()
-        elif line.strip() == "" and not meta:  # пустая строка после метаданных
-            description_start = i + 1
-            break
-        else:  # началось описание
-            description_start = i
-            break
-    
-    description = "\n".join(lines[description_start:]).strip()
-    
-    return {
-        "version": meta.get("version", "N/A"),
-        "source": meta.get("source"),
-        "author": meta.get("author", "Неизвестно"),
-        "description": description or "Описание отсутствует."
+    meta = {
+        "version": "N/A", 
+        "source": None, 
+        "author": "Неизвестно", 
+        "description": "Описание отсутствует."
     }
+    
+    if not docstring:
+        return meta
 
-def parse_clean_description(doc: str) -> str:
-    """
-    Извлекает из docstring чистое описание, удаляя блок <manifest>.
-    """
-    if not doc:
-        return "Описание отсутствует."
+    # 2. Ищем манифест внутри docstring
+    match = re.search(r"<manifest>(.*?)</manifest>", docstring, re.DOTALL)
+    
+    if match:
+        manifest_block = match.group(0) # Весь блок <manifest>...</manifest>
+        manifest_content = match.group(1) # То, что внутри
+        
+        # Парсим ключи внутри манифеста
+        for line in manifest_content.split("\n"):
+            line = line.strip()
+            if ":" in line and not line.startswith("•"):
+                key, value = line.split(":", 1)
+                meta[key.strip().lower()] = value.strip()
+        
+        # 3. Описание — это docstring МИНУС манифест
+        clean_description = docstring.replace(manifest_block, "").strip()
+    else:
+        # Если манифеста нет, весь docstring — это описание
+        clean_description = docstring.strip()
 
-    description = re.sub(r"<manifest>.*?</manifest>", "", doc, flags=re.DOTALL).strip()
-    return description or "Описание отсутствует."
+    if clean_description:
+        meta["description"] = clean_description
+        
+    return meta
 
 def get_module_info(module_name: str) -> str:
-    """Возвращает только описание модуля (без метаданных)."""
+    """Возвращает только описание модуля (для меню)."""
     module_path = MODULES_DIR / f"{module_name}.py"
     if not module_path.exists():
         return "Описание отсутствует."
@@ -64,7 +79,7 @@ def get_module_info(module_name: str) -> str:
         return "Описание отсутствует."
 
 def cache_modules_info():
-    """Собирает __doc__ из всех модулей, очищает его от манифеста и сохраняет в modules_info.json."""
+    """Кеширует описания всех модулей в JSON."""
     print("Кеширование информации о модулях...")
     info = {}
     
@@ -75,19 +90,13 @@ def cache_modules_info():
         module_import_name = ".".join(module_path.relative_to(MODULES_DIR).with_suffix("").parts)
         
         try:
-            spec = importlib.util.spec_from_file_location(module_import_name, module_path)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                
-                doc_string = getattr(module, "__doc__", "")
-                clean_description = parse_clean_description(doc_string)
-                info[module_import_name] = clean_description
-            else:
-                info[module_import_name] = "Не удалось загрузить спецификацию модуля."
+            # Читаем файл как текст, чтобы не исполнять код при кешировании
+            content = module_path.read_text(encoding='utf-8')
+            manifest = parse_manifest(content)
+            info[module_import_name] = manifest["description"]
         except Exception as e:
-            print(f"Не удалось получить информацию из модуля {module_import_name}: {e}")
-            info[module_import_name] = f"Ошибка чтения: {e}"
+            # print(f"Не удалось получить информацию из {module_import_name}: {e}")
+            info[module_import_name] = "Описание отсутствует."
             
     with MODULES_INFO_FILE.open("w", encoding="utf-8") as f:
         json.dump(info, f, indent=4, ensure_ascii=False)

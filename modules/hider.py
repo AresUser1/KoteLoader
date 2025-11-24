@@ -1,14 +1,13 @@
 # modules/hider.py
-"""<manifest>
-version: 1.0.1
+"""
+<manifest>
+version: 1.0.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/hider.py
 author: Kote
+</manifest>
 
-Команды:
-• hide <название> - Скрыть модуль из .help
-• unhide <название> - Вернуть модуль в .help
-• hidden - Показать список скрытых
-</manifest>"""
+Модуль для скрытия других модулей из списка .help.
+"""
 
 from core import register, Module
 from utils import database as db
@@ -17,11 +16,13 @@ from utils.message_builder import build_and_edit
 from telethon.tl.types import MessageEntityBold, MessageEntityCode
 
 class HiderModule(Module):
-    """Модуль для управления скрытыми модулями в .help"""
 
     @register("hide", outgoing=True)
     async def hide_cmd(self, event):
-        """Скрывает модуль из списка .help."""
+        """Скрывает модуль из списка .help.
+        
+        Usage: {prefix}hide <название>
+        """
         if not check_permission(event, min_level="TRUSTED"):
             return
             
@@ -38,7 +39,10 @@ class HiderModule(Module):
 
     @register("unhide", outgoing=True)
     async def unhide_cmd(self, event):
-        """Показывает модуль в списке .help."""
+        """Возвращает модуль в список .help.
+        
+        Usage: {prefix}unhide <название>
+        """
         if not check_permission(event, min_level="TRUSTED"):
             return
             
@@ -55,7 +59,10 @@ class HiderModule(Module):
 
     @register("hidden", outgoing=True)
     async def hidden_cmd(self, event):
-        """Показывает список скрытых модулей."""
+        """Показывает список скрытых модулей.
+        
+        Usage: {prefix}hidden
+        """
         if not check_permission(event, min_level="TRUSTED"):
             return
             

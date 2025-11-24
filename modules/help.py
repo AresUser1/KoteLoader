@@ -1,12 +1,14 @@
 # modules/help.py
-"""<manifest>
-version: 1.0.2
+"""
+<manifest>
+version: 1.1.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/help.py
 author: Kote
+</manifest>
 
-Команды:
-• help [команда] - Показывает справку по командам
-</manifest>"""
+Модуль справки.
+Отображает список доступных модулей и детальную информацию о командах.
+"""
 
 from collections import defaultdict
 from telethon.tl.types import MessageEntityBlockquote, MessageEntityCustomEmoji, MessageEntityBold, MessageEntityItalic, MessageEntityCode
@@ -16,27 +18,26 @@ from utils.message_builder import build_and_edit, utf16len
 from utils import database as db
 from utils.security import check_permission
 
-# --- ПРЕМИУМ ЭМОДЗИ ---
-PAW_EMOJI_ID = 5084923566848213749  # 🐾
-SQUARE_EMOJI_ID_SYSTEM = 4974681956907221809  # ▪️ для системных
-SQUARE_EMOJI_ID_USER = 4974508259839836856  # ▪️ для пользовательских
-INFO_EMOJI_ID = 5879813604068298387  # ℹ️
-USAGE_EMOJI_ID = 5197195523794157505  # ▫️
+PAW_EMOJI_ID = 5084923566848213749  
+SQUARE_EMOJI_ID_SYSTEM = 4974681956907221809  
+SQUARE_EMOJI_ID_USER = 4974508259839836856  
+INFO_EMOJI_ID = 5879813604068298387  
+USAGE_EMOJI_ID = 5197195523794157505  
 
-# Список системных модулей
 SYSTEM_MODULES = ["admin", "help", "install", "modules", "updater", "logs", "ping", "profile", "config", "hider", "power", "git_manager", "core_updater", "about", "aliases", "twins"]
 
 @register("help", incoming=True)
 async def help_cmd(event):
-    """Показывает справку по командам."""
+    """Показывает справку по командам.
+    
+    Usage: {prefix}help [команда]
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
     args = event.pattern_match.group(1)
-
     hidden_modules = db.get_hidden_modules()
 
-    # --- Функция для справки по конкретной команде ---
     async def show_command_help(command_name):
         prefix = db.get_setting("prefix", default=".")
         
@@ -54,9 +55,17 @@ async def help_cmd(event):
             ])
 
         doc = (cmd_info_list[0].get("doc") or "Без описания").strip()
+        
+        doc = doc.replace("{prefix}", prefix)
+
         module_name = cmd_module.capitalize()
-        description = doc.split('\nUsage:')[0].strip()
-        usage_text = doc.split('\nUsage:')[1].strip() if '\nUsage:' in doc else ""
+        
+        if '\nUsage:' in doc:
+            description = doc.split('\nUsage:')[0].strip()
+            usage_text = doc.split('\nUsage:')[1].strip()
+        else:
+            description = doc
+            usage_text = ""
 
         parts = [
             {"text": "🐾", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": PAW_EMOJI_ID}},
@@ -65,13 +74,23 @@ async def help_cmd(event):
             {"text": "ℹ️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": INFO_EMOJI_ID}},
             {"text": f" {description}", "entity": MessageEntityItalic},
             {"text": "\n\n"},
-            {"text": "▫️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": USAGE_EMOJI_ID}},
-            {"text": " Использование: ", "entity": MessageEntityBold},
-            {"text": f"{prefix}{command_name} {usage_text}", "entity": MessageEntityCode},
         ]
+        
+        if usage_text:
+            parts.extend([
+                {"text": "▫️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": USAGE_EMOJI_ID}},
+                {"text": " Использование: ", "entity": MessageEntityBold},
+                {"text": f"{prefix}{command_name} {usage_text}" if "{prefix}" not in usage_text and not usage_text.startswith(prefix) else usage_text, "entity": MessageEntityCode},
+            ])
+        else:
+             parts.extend([
+                {"text": "▫️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": USAGE_EMOJI_ID}},
+                {"text": " Использование: ", "entity": MessageEntityBold},
+                {"text": f"{prefix}{command_name}", "entity": MessageEntityCode},
+            ])
+            
         await build_and_edit(event, parts)
 
-    # --- Функция для общего списка команд ---
     async def show_all_commands():
         visible_modules = defaultdict(list)
         for command, cmd_info_list in sorted(COMMANDS_REGISTRY.items()):
@@ -92,7 +111,6 @@ async def help_cmd(event):
                     entities.append(entity_type(offset=current_offset, length=length, **kwargs))
             current_offset += utf16len(text)
 
-        # Заголовок
         append_part("🐾", MessageEntityCustomEmoji, document_id=PAW_EMOJI_ID)
         append_part(f" {len(visible_modules)} модулей доступно", MessageEntityBold)
         if hidden_modules:
@@ -145,7 +163,6 @@ async def help_cmd(event):
         else:
             await event.respond(final_text, formatting_entities=entities, link_preview=False)
 
-    # --- Основная логика ---
     if args:
         await show_command_help(args)
     else:

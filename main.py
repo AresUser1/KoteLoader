@@ -7,6 +7,7 @@ import os
 import uuid
 from configparser import ConfigParser
 from telethon import TelegramClient, events
+from telethon.errors import AccessTokenInvalidError, AccessTokenExpiredError
 
 LOG_FILE = "kote_loader.log"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -22,72 +23,96 @@ try:
     from services.twin_manager import twin_manager 
 except ImportError as e:
     print(f"Критическая ошибка: не удалось импортировать необходимый компонент: {e}")
-    print("Пожалуйста, убедитесь, что все файлы проекта на месте.")
     exit()
 
 START_TIME = time.time()
 
 async def ensure_inline_mode_enabled(user_client, bot_username):
     try:
-        print(f"🔄 Проверяем inline-режим для @{bot_username}...")
-        async with user_client.conversation('@BotFather', timeout=30) as conv:
+        print(f"🔄 Проверяем настройки inline-режима для @{bot_username}...")
+        # Используем exclusive=False, чтобы не конфликтовать с другими диалогами
+        async with user_client.conversation('@BotFather', timeout=40, exclusive=False) as conv:
+            # На всякий случай сбрасываем состояние BotFather
+            await conv.send_message('/cancel')
+            await asyncio.sleep(0.5)
+            
             await conv.send_message('/setinline')
-            await conv.get_response()
-            await conv.send_message(f"@{bot_username}")
             resp = await conv.get_response()
-            if "placeholder" not in resp.text.lower():
-                 print(f"⚠️ Не удалось выбрать бота @{bot_username} в BotFather.")
-                 await conv.cancel_all()
-                 return
-            await conv.send_message("Введите команду...")
-            await conv.get_response()
-            print(f"✅ Inline-режим для @{bot_username} проверен и активен.")
-    except Exception as e:
-        print(f"⚠️ Произошла ошибка при настройке inline-режима: {e}")
-
-async def create_new_bot_with_botfather(api_id, api_hash, session_name):
-    async with TelegramClient(session_name, api_id, api_hash) as client:
-        print("\n🤖 Начинаем диалог с @BotFather...")
-        async with client.conversation('@BotFather', timeout=60) as conv:
-            try:
-                await conv.send_message('/newbot')
-                resp = await conv.get_response()
-                if "try again in" in resp.text: return None
-                if "How are we going to call it?" not in resp.text: return None
-                await conv.send_message("KoteLoaderBot")
-                resp = await conv.get_response()
-                if "choose a username" not in resp.text: return None
-
-                bot_token = None
-                bot_username = None
-                
-                for attempt in range(3):
-                    random_part = uuid.uuid4().hex[:8]
-                    username_to_try = f"KoteLoader_{random_part}_bot"
-                    await conv.send_message(username_to_try)
-                    resp = await conv.get_response()
-                    if "Done! Congratulations" in resp.text:
-                        match = re.search(r'(\d+:[a-zA-Z0-9_-]{35})', resp.text)
-                        if match:
-                            bot_token = match.group(1)
-                            bot_username = username_to_try
-                            print("✅ Бот успешно создан!")
-                            break
-                    elif "taken" in resp.text: continue
-                    else: return None
-
-                if not bot_token: return None
-
-                await conv.send_message('/setinline')
-                await conv.get_response()
+            
+            if "Choose a bot" in resp.text:
                 await conv.send_message(f"@{bot_username}")
-                await conv.get_response()
-                await conv.send_message("Введите команду...")
-                await conv.get_response()
-                return bot_token
+                resp = await conv.get_response()
 
-            except asyncio.TimeoutError:
+            if "placeholder" in resp.text.lower():
+                await conv.send_message("Search...")
+                await conv.get_response()
+                print(f"✅ Inline-режим для @{bot_username} успешно активирован/обновлен.")
+            elif "Success" in resp.text:
+                print(f"✅ Inline-режим для @{bot_username} уже активен.")
+            else:
+                # Иногда BotFather пишет что-то нестандартное, выводим первую строку
+                print(f"ℹ️ Ответ BotFather: {resp.text.splitlines()[0]}")
+                 
+    except Exception as e:
+        print(f"⚠️ Не удалось автоматически включить inline-режим: {e}")
+        print("   (Если меню не работает, включите его вручную в @BotFather -> Bot Settings -> Inline Mode)")
+
+async def auto_create_bot(user_client):
+    print("\n🤖 Начинаем автоматическое создание бота через @BotFather...")
+    async with user_client.conversation('@BotFather', timeout=60, exclusive=True) as conv:
+        try:
+            await conv.send_message('/cancel')
+            await asyncio.sleep(0.5)
+            
+            await conv.send_message('/newbot')
+            resp = await conv.get_response()
+            
+            if "try again in" in resp.text:
+                print("❌ BotFather просит подождать (флуд-лимит).")
                 return None
+            
+            if "can't add more than" in resp.text:
+                print("❌ ОШИБКА: Достигнут лимит созданных ботов.")
+                print("   Удалите старых через /deletebot в @BotFather.")
+                return None
+            
+            await conv.send_message("KoteLoader Userbot")
+            resp = await conv.get_response()
+            
+            if "choose a username" not in resp.text.lower():
+                print(f"⚠️ Сбой диалога с BotFather: {resp.text}")
+                return None
+
+            bot_token = None
+            
+            for attempt in range(5):
+                random_part = uuid.uuid4().hex[:6]
+                username_to_try = f"Kote_{random_part}_bot"
+                await conv.send_message(username_to_try)
+                resp = await conv.get_response()
+                
+                if "Done!" in resp.text:
+                    match = re.search(r'(\d+:[a-zA-Z0-9_-]{35})', resp.text)
+                    if match:
+                        bot_token = match.group(1)
+                        print(f"✅ Бот успешно создан: @{username_to_try}")
+                        break
+                elif "taken" in resp.text:
+                    print(f"   Юзернейм {username_to_try} занят, пробую другой...")
+                    continue
+                else:
+                    print(f"❌ Ошибка BotFather: {resp.text}")
+                    return None
+
+            if not bot_token:
+                print("❌ Не удалось создать бота за 5 попыток.")
+                return None
+            
+            return bot_token
+
+        except asyncio.TimeoutError:
+            print("❌ BotFather не ответил вовремя.")
+            return None
 
 async def all_messages_handler(event):
     for watcher_func, kwargs in loader.WATCHERS_REGISTRY:
@@ -99,72 +124,112 @@ async def all_messages_handler(event):
 async def start_clients():
     config = ConfigParser()
     config_file = "config.ini"
-    
-    config.read(config_file, encoding='utf-8')
-    
-    if not os.path.exists(config_file) or not config.has_section("telethon"):
-        print(f"Файл конфигурации '{config_file}' не найден или некорректен. Приступим к созданию...")
-        print("Пожалуйста, введите данные вашего Telegram-аккаунта для входа.")
-        api_id = input("Введите ваш api_id: ")
-        api_hash = input("Введите ваш api_hash: ")
 
-        session_name = ""
-        while not session_name.strip():
-            session_name = input("Введите имя сессии (например, my_account): ")
-            if not session_name.strip():
-                print("❌ Имя сессии не может быть пустым.")
-
-        bot_token = await create_new_bot_with_botfather(api_id, api_hash, session_name)
-        if not bot_token:
-            print("\nНе удалось автоматически создать бота. Завершение работы.")
-            return None, None
-            
-        config['telethon'] = {'api_id': api_id, 'api_hash': api_hash, 'session_name': session_name, 'bot_token': bot_token}
+    if os.path.exists(config_file):
+        config.read(config_file, encoding='utf-8')
+    
+    if not config.has_section("telethon"):
+        print(f"⚙️ Файл конфигурации не найден. Приступим к настройке.")
+        api_id = input("Введите api_id: ")
+        api_hash = input("Введите api_hash: ")
+        session_name = "my_account"
+        
+        config['telethon'] = {
+            'api_id': api_id, 
+            'api_hash': api_hash, 
+            'session_name': session_name
+        }
         with open(config_file, 'w', encoding='utf-8') as f:
             config.write(f)
-        print(f"\n✅ Конфигурация успешно сохранена в '{config_file}'.")
-        print("Пожалуйста, перезапустите бота командой: python3 main.py")
-        return None, None
+    else:
+        api_id = config.getint("telethon", "api_id")
+        api_hash = config.get("telethon", "api_hash")
+        session_name = config.get("telethon", "session_name")
 
-    api_id = config.getint("telethon", "api_id")
-    api_hash = config.get("telethon", "api_hash")
-    session_name = config.get("telethon", "session_name", fallback=None)
-    bot_token = config.get("telethon", "bot_token", fallback=None)
+    print(f"\n🚀 Подключение к аккаунту ({session_name})...")
+    user_client = TelegramClient(session_name, api_id, api_hash)
+    
+    await user_client.connect()
+    if not await user_client.is_user_authorized():
+        phone_number = input("Введите номер телефона (например +79001234567): ")
+        await user_client.start(phone=phone_number)
+    else:
+        await user_client.start()
 
-    if not session_name: return None, None
+    print("✅ Успешный вход в аккаунт!")
+
+    bot_client = None
+    
+    while True:
+        bot_token = config.get("telethon", "bot_token", fallback=None)
+        
+        if not bot_token:
+            print("\n🤖 Для работы меню нужен Бот-помощник.")
+            print("1. Ввести токен вручную")
+            print("2. Создать автоматически")
+            
+            while True:
+                choice = input("Ваш выбор (1/2): ").strip()
+                if choice == "1":
+                    bot_token = input("Введите токен бота: ").strip()
+                    break
+                elif choice == "2":
+                    bot_token = await auto_create_bot(user_client) 
+                    if bot_token:
+                        break
+                    else:
+                        print("⚠️ Не удалось создать бота. Введите токен вручную.")
+                else:
+                    print("Введите 1 или 2.")
+            
+            if bot_token:
+                config['telethon']['bot_token'] = bot_token
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    config.write(f)
+
+        if bot_token:
+            print(f"🚀 Проверка запуска бота...")
+            try:
+                bot_client = TelegramClient(None, api_id, api_hash)
+                await bot_client.start(bot_token=bot_token)
+                print("✅ Бот успешно запущен!")
+                break 
+            except (AccessTokenInvalidError, AccessTokenExpiredError):
+                print(f"❌ ОШИБКА: Токен бота невалиден или устарел!")
+                print("🗑 Удаляю старый токен, давайте создадим нового.")
+                config.remove_option('telethon', 'bot_token')
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    config.write(f)
+                bot_token = None 
+            except Exception as e:
+                print(f"⚠️ Ошибка при запуске бота: {e}")
+                print("Попробуем настроить заново...")
+                config.remove_option('telethon', 'bot_token')
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    config.write(f)
+                bot_token = None
 
     db.init_db()
     if db.get_setting("debug_mode") == "True":
         logging.getLogger().setLevel(logging.DEBUG)
     
     loader.PREFIX = db.get_setting("prefix", default=".")
-    print(f"Префикс: {loader.PREFIX}")
-
-    user_client = TelegramClient(session_name, api_id, api_hash)
-    bot_client = None
-
-    print("🚀 Запускаем user-клиент...")
-    await user_client.start()
-
-    if bot_token:
-        print("🚀 Запускаем bot-клиент...")
-        bot_client = TelegramClient(None, api_id, api_hash)
-        await bot_client.start(bot_token=bot_token)
-        bot_me = await bot_client.get_me()
-        await ensure_inline_mode_enabled(user_client, bot_me.username)
-    else:
-        print("⚠️ Bot-клиент не запущен (нет токена).")
+    print(f"ℹ️ Префикс команд: {loader.PREFIX}")
 
     user_client.bot_client = bot_client
-    if bot_client: bot_client.user_client = user_client
-
-    if bot_client:
+    if bot_client: 
+        bot_client.user_client = user_client
         try:
             bot_info = await bot_client.get_me()
-            ping_msg = await user_client.send_message(bot_info.username, "/start")
-            await ping_msg.delete()
-            await user_client.get_dialogs(1)
-        except: pass
+            
+            # --- ВАЖНО: Принудительная проверка inline-режима ПРИ КАЖДОМ ЗАПУСКЕ ---
+            # Делаем паузу, чтобы Telethon не ругался на флуд/конфликты, если только что создали бота
+            await asyncio.sleep(1) 
+            await ensure_inline_mode_enabled(user_client, bot_info.username)
+            
+            await user_client.send_message(bot_info.username, "/start")
+        except Exception as e:
+             print(f"⚠️ Небольшая ошибка при инициализации диалога с ботом: {e}")
 
     panel_pattern = re.compile(f"^{re.escape(loader.PREFIX)}(panel|settings)(?:\\s+(.*))?", re.IGNORECASE)
     user_client.add_event_handler(user_panel_helper, events.NewMessage(pattern=panel_pattern, outgoing=True))
@@ -177,6 +242,7 @@ async def start_clients():
     me = await user_client.get_me()
     if db.get_user_level(me.id) != "OWNER":
         db.add_user(me.id, "OWNER")
+        print(f"👑 Права владельца выданы: {me.first_name} (ID: {me.id})")
 
     return user_client, bot_client
 
@@ -187,12 +253,18 @@ async def main():
     worker_task = asyncio.create_task(command_worker(user_client))
     
     print("👥 Запускаю твинков...")
-    twins_count = await twin_manager.start_all_twins()
-    print(f"✅ Запущено твинков: {twins_count}")
+    try:
+        twins_count = await twin_manager.start_all_twins()
+        print(f"✅ Запущено твинков: {twins_count}")
+    except Exception as e:
+        print(f"⚠️ Ошибка при запуске твинков: {e}")
 
+    print("\n🟢 KoteLoader полностью запущен! Напишите .help в чате.")
+    
     try:
         tasks = [worker_task, user_client.run_until_disconnected()]
-        if bot_client: tasks.append(bot_client.run_until_disconnected())
+        if bot_client: 
+            tasks.append(bot_client.run_until_disconnected())
         await asyncio.gather(*tasks)
     finally:
         print("\nЗавершение работы...")

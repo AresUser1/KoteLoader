@@ -1,36 +1,27 @@
 # modules/updater.py
 """
-Модуль для проверки и установки обновлений для других модулей через интерактивное меню.
-
 <manifest>
-version: 1.0.5
+version: 1.0.6
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/updater.py
 author: Kote
+</manifest>
 
-Команды:
-• check_updates - Проверить обновления и показать меню в боте.
-• update <название> [chat_id] - Установить обновление (используется ботом).
-</manifest>"""
+Модуль для проверки и установки обновлений модулей.
+Сканирует локальные файлы, сверяет версии с манифестом в репозитории и обновляет их.
+"""
 
 import aiohttp
-import json
-import re
+import time
 import traceback
 from pathlib import Path
-import pickle
-import base64
-import time
 
 from core import register
 from utils.loader import reload_module
 from utils.security import check_permission
-from utils.message_builder import build_and_edit
-from telethon.tl.types import MessageEntityBold
 from handlers.user_commands import _call_inline_bot
+from services.module_info_cache import parse_manifest
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
-
-from services.module_info_cache import parse_manifest
 
 async def check_for_updates():
     """
@@ -56,10 +47,7 @@ async def check_for_updates():
             url_to_fetch = f"{source_url}?t={int(time.time())}"
             headers = {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
 
-            # --- ❗️ 2. ИЗМЕНЕНИЕ ЗДЕСЬ ❗️ ---
-            # trust_env=False говорит aiohttp ИГНОРИРОВАТЬ системные прокси (HTTP_PROXY)
             async with aiohttp.ClientSession(trust_env=False) as session:
-            # ---
                 async with session.get(url_to_fetch, headers=headers) as response:
                     if response.status != 200: continue
                     remote_content = await response.text()
@@ -85,21 +73,23 @@ async def check_for_updates():
 
 @register("check_updates", incoming=True)
 async def check_updates_cmd(event):
-    """Запускает проверку обновлений через инлайн-меню."""
+    """Запускает проверку обновлений через инлайн-меню.
+    
+    Usage: .check_updates
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
     try:
         await _call_inline_bot(event, "updates:check")
     except Exception as e:
-        await event.respond(f"**❌ Не удалось вызвать меню обновлений.**\n"
-                            f"**Ошибка:** `{e}`")
+        await event.respond(f"**❌ Не удалось вызвать меню обновлений.**\n**Ошибка:** `{e}`")
 
 @register("update", incoming=True)
 async def update_cmd(event):
-    """
-    Команда, которую будет вызывать бот для фактического обновления.
-    Usage: <название_модуля> [chat_id_to_report]
+    """Команда, которую использует бот для установки обновления.
+    
+    Usage: .update <название> [chat_id]
     """
     if not check_permission(event, min_level="TRUSTED"):
         return
@@ -120,7 +110,7 @@ async def update_cmd(event):
     try:
         message = await event.client.send_message(report_chat_id, f"**Обновляю `{module_to_update}`...**", parse_mode="md")
     except Exception as e:
-        await event.respond(f"**Не удалось отправить отчет об обновлении {module_to_update} в чат {report_chat_id}.**\nОшибка: `{e}`", parse_mode="md")
+        await event.respond(f"**Не удалось отправить отчет об обновлении {module_to_update}.**\n`{e}`", parse_mode="md")
         return
     
     updates = await check_for_updates()
@@ -133,9 +123,7 @@ async def update_cmd(event):
         url_to_fetch = f"{found['source']}?t={int(time.time())}"
         headers = {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'}
         
-        # --- ❗️ 2. ИЗМЕНЕНИЕ ЗДЕСЬ (аналогично) ❗️ ---
         async with aiohttp.ClientSession(trust_env=False) as session:
-        # ---
             async with session.get(url_to_fetch, headers=headers) as response:
                 remote_content = await response.text()
         
@@ -143,7 +131,6 @@ async def update_cmd(event):
             f.write(remote_content)
         
         await reload_module(event.client, found["module_name"])
-        
         await message.edit(f"✅ **Модуль `{found['module_name']}` обновлен до версии {found['new_version']}!**", parse_mode="md")
         
     except Exception:

@@ -1,12 +1,13 @@
 # modules/ping.py
-"""<manifest>
-version: 1.0.1
+"""
+<manifest>
+version: 1.0.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/ping.py
 author: Kote
+</manifest>
 
-Команды:
-• ping - Показать скорость ответа Telegram и время работы (аптайм).
-</manifest>"""
+Команды для проверки состояния бота: скорость отклика API и время работы (аптайм).
+"""
 
 import time
 from datetime import timedelta
@@ -18,29 +19,27 @@ from utils.security import check_permission
 from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold, MessageEntityCode
 from telethon.tl.functions.users import GetUsersRequest
 
-# --- Премиум Эмодзи ---
-PING_EMOJI_ID = 5431449001532594346    # ⚡️
-ROCKET_EMOJI_ID = 5445284980978621387  # 🚀
+PING_EMOJI_ID = 5431449001532594346    
+ROCKET_EMOJI_ID = 5445284980978621387  
 
 def get_uptime() -> str:
-    """Возвращает время работы бота в читаемом формате."""
     return str(timedelta(seconds=int(time.time() - START_TIME)))
 
 @register("ping", incoming=True)
 async def ping_cmd(event):
-    """Проверяет скорость ответа API Telegram и аптайм бота."""
+    """Проверяет скорость ответа API Telegram и аптайм бота.
+    
+    Usage: {prefix}ping
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
-    # Замеряем реальную задержку до API
     start = time.time()
     await event.client(GetUsersRequest(id=[await event.client.get_me()]))
     telegram_ping = round((time.time() - start) * 1000, 2)
     
-    # Получаем аптайм
     uptime = get_uptime()
     
-    # Собираем красивое сообщение
     parts = [
         {"text": "⚡️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": PING_EMOJI_ID}},
         {"text": " Скорость отклика Telegram: ", "entity": MessageEntityBold},

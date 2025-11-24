@@ -1,14 +1,14 @@
 # modules/git_manager.py
-"""<manifest>
-version: 1.0.4
+"""
+<manifest>
+version: 1.0.5
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/git_manager.py
 author: Kote
+</manifest>
 
-Команды:
-• set_gh_repo <url> - Установить URL репозитория
-• set_gh_token <токен> - Установить Personal Access Token (PAT)
-• upload_module <модуль> - Загрузить модуль в репозиторий
-</manifest>"""
+Инструмент для разработчиков модулей.
+Позволяет автоматически обновлять версию модуля и загружать его в ваш GitHub репозиторий.
+"""
 
 import aiohttp
 import json
@@ -22,7 +22,6 @@ from utils.message_builder import build_and_edit
 from utils.security import check_permission
 from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityCustomEmoji
 
-# --- Премиум Эмодзи ---
 SUCCESS_EMOJI_ID = 5255813619702049821
 ERROR_EMOJI_ID = 5985346521103604145
 GIT_EMOJI_ID = 5968434789424832533
@@ -32,28 +31,28 @@ ROCKET_EMOJI_ID = 5445284980978621387
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 
 def parse_repo_url(url: str) -> dict:
-    """Извлекает 'owner' и 'repo' из URL-адреса GitHub."""
     match = re.search(r"github\.com/([^/]+)/([^/]+)", url)
     if match:
         return {"owner": match.group(1), "repo": match.group(2).replace(".git", "")}
     return {}
 
 def get_module_path(module_name: str) -> Path | None:
-    """Находит полный путь к файлу модуля, включая вложенные."""
     potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))
     if potential_paths:
         return potential_paths[0]
     return None
 
 def increment_version(version: str) -> str:
-    """Увеличивает патч-версию (1.0.0 -> 1.0.1)"""
     parts = list(map(int, version.split('.')))
     parts[-1] += 1
     return ".".join(map(str, parts))
 
 @register("set_gh_repo", incoming=True)
 async def set_repo_alias(event):
-    """Алиас для команды .setrepo, сохраняет URL репозитория."""
+    """Установить URL репозитория.
+    
+    Usage: {prefix}set_gh_repo <url>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -73,8 +72,10 @@ async def set_repo_alias(event):
 
 @register("set_gh_token", incoming=True)
 async def set_gh_token(event):
-    """Сохраняет GitHub PAT в базу данных."""
-    # ❗️❗️❗️ ИЗМЕНЕНИЕ: Убрано сообщение об ошибке. Теперь просто "return". ❗️❗️❗️
+    """Установить GitHub Token (PAT).
+    
+    Usage: {prefix}set_gh_token <token>
+    """
     if not check_permission(event, min_level="OWNER"):
         return
 
@@ -90,11 +91,14 @@ async def set_gh_token(event):
         {"text": "🔑", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": KEY_EMOJI_ID}},
         {"text": " GitHub PAT токен сохранен в базу данных.", "entity": MessageEntityBold}
     ])
-    await event.delete() # Удаляем сообщение с токеном из чата
+    await event.delete() 
 
 @register("upload_module", incoming=True)
 async def upload_module_cmd(event):
-    """Автоматически обновляет версию и загружает модуль на GitHub."""
+    """Загрузить модуль на GitHub.
+    
+    Usage: {prefix}upload_module <модуль>
+    """
     if not check_permission(event, min_level="TRUSTED"):
         return
 
@@ -124,7 +128,6 @@ async def upload_module_cmd(event):
         {"text": f" Начинаю загрузку `{module_name}`... (1/4)", "entity": MessageEntityBold}
     ])
 
-    # 1. Читаем и обновляем версию в манифесте
     try:
         content = module_path.read_text(encoding="utf-8")
         from services.module_info_cache import parse_manifest
@@ -146,7 +149,6 @@ async def upload_module_cmd(event):
     except Exception as e:
         return await build_and_edit(event, [{"text": f"❌ Ошибка чтения/обновления файла: {e}"}])
 
-    # 2. Подготовка к загрузке на GitHub
     owner, repo = repo_info["owner"], repo_info["repo"]
     file_path_in_repo = "modules/" + module_name.replace(".", "/") + ".py"
     api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path_in_repo}"
@@ -157,7 +159,6 @@ async def upload_module_cmd(event):
     }
     
     try:
-        # 3. Получаем SHA файла (обязательно для обновления)
         await build_and_edit(event, [{"text": f"🚀 Получаю SHA файла... (3/4)", "entity": MessageEntityBold}])
         current_sha = None
         async with aiohttp.ClientSession(headers=headers) as session:
@@ -167,7 +168,6 @@ async def upload_module_cmd(event):
                 elif response.status != 404:
                     return await build_and_edit(event, [{"text": f"❌ Ошибка GitHub (GET): {response.status} {await response.text()}"}])
 
-        # 4. Загружаем файл (создаем или обновляем)
         await build_and_edit(event, [{"text": f"🚀 Загружаю файл в репозиторий... (4/4)", "entity": MessageEntityBold}])
         
         content_b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
