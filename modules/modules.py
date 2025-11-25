@@ -1,7 +1,7 @@
 # modules/modules.py
 """
 <manifest>
-version: 1.0.8
+version: 1.0.9
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/modules.py
 author: Kote
 </manifest>
@@ -26,7 +26,7 @@ from telethon.errors.rpcerrorlist import MessageNotModifiedError
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 BACKUPS_DIR = Path(__file__).parent.parent / "backups"
-SYSTEM_MODULE_NAMES = ["admin", "help", "fun", "install", "modules", "updater", "logs", "ping", "exec", "profile", "config", "git_manager", "core_updater"]
+SYSTEM_MODULE_NAMES = ["admin", "help", "fun", "install", "modules", "updater", "ping", "exec", "profile", "config", "git_manager", "core_updater"]
 
 def _get_static_emojis() -> dict:
     DEFAULT_STATIC_EMOJIS = {
@@ -319,6 +319,10 @@ async def module_info(event):
             {"text": f" Модуль `{module_name_input}` не найден.", "entity": MessageEntityBold}
         ])
 
+    # Используем функцию поиска из install.py (внедряем логику сюда)
+    # Так как _find_module_by_name возвращает правильное имя с учетом регистра,
+    # мы можем просто использовать его для поиска пути.
+    # Но надежнее использовать рекурсивный поиск, так как вложенность может быть разной.
     module_path = None
     potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))
     if potential_paths:
@@ -498,7 +502,11 @@ async def reload_cmd(event):
     await _handle_module_command(event, "reload")
 
 def get_module_size(module_name):
-    potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))
+    # Ищем модуль нечетко, чтобы получить правильный путь
+    real_name = _find_module_by_name(module_name)
+    if not real_name: return None
+    
+    potential_paths = list(MODULES_DIR.rglob(f"{real_name.replace('.', '/')}.py"))
     if potential_paths:
         path = potential_paths[0]
         if path.exists(): return round(path.stat().st_size / 1024, 2)

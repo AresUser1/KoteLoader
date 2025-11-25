@@ -1,12 +1,13 @@
 # modules/install.py
 """
 <manifest>
-version: 1.1.1
+version: 1.2.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
 </manifest>
 
-Управление модулями: установка (по ссылке/файлу), удаление и получение исходного кода.
+Управление модулями: установка, удаление, скачивание.
+Поддерживает нечувствительный к регистру поиск файлов.
 """
 
 import os
@@ -22,6 +23,8 @@ from utils import database as db
 from utils.message_builder import build_and_edit, build_message
 from utils.security import scan_code, check_permission
 from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold, MessageEntityCode
+from services.module_info_cache import parse_manifest
+from utils.loader import get_all_modules
 
 SUCCESS_EMOJI_ID = 5255813619702049821
 FOLDER_EMOJI_ID = 5256113064821926998
@@ -33,6 +36,63 @@ SECURITY_BLOCK_ID = 5778527486270770928
 SECURITY_WARN_ID = 5881702736843511327
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
+
+def _find_module_path(user_input: str) -> Path | None:
+    """
+    Ищет путь к файлу или папке модуля, игнорируя регистр.
+    Поддерживает точки как разделители.
+    """
+    if not user_input: return None
+    
+    # 1. Пробуем прямой путь (если ввели точно)
+    direct_path = MODULES_DIR / user_input
+    if direct_path.exists(): return direct_path
+    
+    direct_path_py = direct_path.with_suffix(".py")
+    if direct_path_py.exists(): return direct_path_py
+    
+    # 2. Пробуем через реестр модулей (поиск имени)
+    # Это поможет найти правильный регистр (например, 'weather' из 'Weather')
+    all_modules = get_all_modules()
+    target_name = None
+    
+    user_input_clean = user_input.lower().replace("_", "")
+    
+    for mod in all_modules:
+        # Сравнение: weather == weather
+        if mod.lower() == user_input.lower():
+            target_name = mod
+            break
+        # Сравнение: spamtwins == spam_twins
+        if mod.lower().replace("_", "") == user_input_clean:
+            target_name = mod
+            break
+            
+    if target_name:
+        # Превращаем имя модуля обратно в путь
+        # module.submodule -> module/submodule.py
+        parts = target_name.split(".")
+        current = MODULES_DIR
+        for part in parts[:-1]:
+            current = current / part
+        
+        # Проверяем файл .py
+        candidate_file = current / (parts[-1] + ".py")
+        if candidate_file.exists(): return candidate_file
+        
+        # Проверяем папку (пакет)
+        candidate_dir = current / parts[-1]
+        if candidate_dir.exists(): return candidate_dir
+
+    return None
+
+def compare_versions(ver1, ver2):
+    try:
+        v1 = list(map(int, ver1.split('.')))
+        v2 = list(map(int, ver2.split('.')))
+        return v1 > v2
+    except ValueError:
+        return False
 
 async def _install_from_py_url(event, url, force=False):
     try:
@@ -107,7 +167,38 @@ async def _install_from_git_repo(event, url, force=False):
 
 async def process_and_install(event, file_name, content, source_url=None, force=False):
     prefix = db.get_setting("prefix", default=".")
+    module_name = file_name[:-3]
+    module_path = MODULES_DIR / file_name
     
+    version_msg = ""
+    if module_path.exists() and not force:
+        try:
+            with open(module_path, 'r', encoding='utf-8') as f:
+                current_content = f.read()
+            
+            current_manifest = parse_manifest(current_content)
+            new_manifest = parse_manifest(content)
+            
+            curr_ver = current_manifest.get("version", "0.0.0")
+            new_ver = new_manifest.get("version", "0.0.0")
+            
+            if compare_versions(new_ver, curr_ver):
+                force = True 
+                version_msg = f" (обновлено: {curr_ver} → {new_ver})"
+            else:
+                return await build_and_edit(event, [
+                    {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
+                    {"text": " Модуль уже существует и версия не новее.\n", "entity": MessageEntityBold},
+                    {"text": f"Текущая: {curr_ver}, Новая: {new_ver}.\n"},
+                    {"text": f"Используйте {prefix}forceupload для перезаписи."}
+                ])
+        except Exception as e:
+            return await build_and_edit(event, [
+                {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
+                {"text": f" Модуль существует. Ошибка проверки версии: {e}.\n", "entity": MessageEntityBold},
+                {"text": f"Используйте {prefix}forceupload."}
+            ])
+
     if not force:
         await build_and_edit(event, [
             {"text": "🛡️ "}, 
@@ -149,15 +240,6 @@ async def process_and_install(event, file_name, content, source_url=None, force=
                  parts.append({"text": "\nЭтот модуль не будет установлен."})
             return await build_and_edit(event, parts)
 
-    module_name = file_name[:-3]
-    module_path = MODULES_DIR / file_name
-    
-    if module_path.exists() and not force:
-        return await build_and_edit(event, [
-            {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
-            {"text": " Модуль уже существует.", "entity": MessageEntityBold}
-        ])
-
     with open(module_path, 'w', encoding='utf-8') as f:
         f.write(content)
     
@@ -170,7 +252,7 @@ async def process_and_install(event, file_name, content, source_url=None, force=
         {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_EMOJI_ID}},
         {"text": " Модуль ", "entity": MessageEntityBold},
         {"text": f"{module_name}", "entity": MessageEntityCode},
-        {"text": " успешно установлен!", "entity": MessageEntityBold},
+        {"text": f" успешно установлен{version_msg}!", "entity": MessageEntityBold},
         {"text": "\n\n"},
         {"text": "📝", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": NOTE_EMOJI_ID}},
         {"text": " Для загрузки используй: "}, 
@@ -252,12 +334,10 @@ async def get_module_cmd(event):
     if not module_name:
         return await build_and_edit(event, "**Укажите имя модуля.**", parse_mode="md")
 
-    module_path = None
-    potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))
-    if potential_paths:
-        module_path = potential_paths[0]
+    # Используем новую функцию поиска
+    module_path = _find_module_path(module_name)
 
-    if not module_path or not module_path.exists():
+    if not module_path:
         return await build_and_edit(event, f"❌ **Модуль `{module_name}` не найден.**", parse_mode="md")
 
     prefix = db.get_setting("prefix", default=".")
@@ -265,7 +345,7 @@ async def get_module_cmd(event):
     parts = [
         {"text": "📁", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": FOLDER_EMOJI_ID}},
         {"text": " Файл модуля ", "entity": MessageEntityBold},
-        {"text": f"{module_name}", "entity": MessageEntityCode},
+        {"text": f"{module_path.name}", "entity": MessageEntityCode},
         {"text": "\n\n"},
         {"text": "🐾", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": PAW_EMOJI_ID}},
         {"text": " "},
@@ -298,11 +378,10 @@ async def remove_module(event):
     if not name_to_remove:
         return await build_and_edit(event, "**Укажите имя модуля или пакета для удаления.**", parse_mode="md")
 
-    path_to_remove = MODULES_DIR / name_to_remove.replace(".", os.sep)
-    if not path_to_remove.exists():
-        path_to_remove = (MODULES_DIR / name_to_remove.replace(".", os.sep)).with_suffix(".py")
+    # Используем новую функцию поиска
+    path_to_remove = _find_module_path(name_to_remove)
 
-    if not path_to_remove.exists():
+    if not path_to_remove:
         return await build_and_edit(event, f"❌ **Ресурс `{name_to_remove}` не найден.**", parse_mode="md")
     
     try:
@@ -314,13 +393,20 @@ async def remove_module(event):
                     db.clear_module(mod_name)
         else:
             from utils.loader import unload_module
-            module_name = ".".join(path_to_remove.relative_to(MODULES_DIR).with_suffix("").parts)
+            # Вычисляем имя модуля для выгрузки: path/modules/Name.py -> Name
+            try:
+                rel_path = path_to_remove.relative_to(MODULES_DIR)
+                module_name = ".".join(rel_path.with_suffix("").parts)
+            except ValueError:
+                 # Фалбэк, если файл вне папки modules (маловероятно)
+                 module_name = path_to_remove.stem
+
             if hasattr(event.client, 'modules') and module_name in event.client.modules:
                 await unload_module(event.client, module_name)
             path_to_remove.unlink()
             db.clear_module(module_name)
             
-        await build_and_edit(event, f"✅ **Ресурс `{name_to_remove}` успешно удален!**", parse_mode="md")
+        await build_and_edit(event, f"✅ **Ресурс `{path_to_remove.name}` успешно удален!**", parse_mode="md")
         
     except Exception as e:
         await build_and_edit(event, f"❌ **Ошибка при удалении:**\n`{traceback.format_exc()}`", parse_mode="md")

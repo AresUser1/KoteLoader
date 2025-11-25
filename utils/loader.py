@@ -8,6 +8,13 @@ import traceback
 from pathlib import Path
 from telethon import events
 from telethon.tl.custom import Button
+# Импортируем типы для форматирования
+from telethon.tl.types import (
+    MessageEntityBold, 
+    MessageEntityCode, 
+    MessageEntityBlockquote,
+    MessageEntityPre
+)
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 PREFIX = "."
@@ -39,7 +46,36 @@ def register(command: str, **kwargs):
             if not is_enabled:
                 if db.get_user_level(event.sender_id) == "OWNER" and command_name == "on": pass
                 else: return
-            await func(event, *args, **kwargs)
+            
+            # --- ПЕРЕХВАТ ОШИБОК ВЫПОЛНЕНИЯ ---
+            try:
+                await func(event, *args, **kwargs)
+            except Exception:
+                # Если произошла ошибка во время выполнения команды
+                from utils.message_builder import build_and_edit
+                
+                exc = traceback.format_exc()
+                
+                parts = [
+                    {"text": "🚫 Call "},
+                    {"text": f".{command}", "entity": MessageEntityCode},
+                    {"text": " failed!\n\n", "entity": MessageEntityBold},
+                    {"text": "🧾 Logs:\n", "entity": MessageEntityBold},
+                    # Попытка создать свернутую цитату.
+                    # message_builder должен уметь обрабатывать kwargs или игнорировать их при ошибке.
+                    {
+                        "text": exc, 
+                        "entity": MessageEntityBlockquote, 
+                        "kwargs": {"collapsed": True}
+                    }
+                ]
+                
+                try:
+                    await build_and_edit(event, parts)
+                except Exception as e:
+                    print(f"CRITICAL ERROR in .{command} handler:\n{exc}")
+                    print(f"Failed to send error message: {e}")
+            # ----------------------------------
         
         wrapper._is_command = True
         wrapper._command_name = command
@@ -72,9 +108,6 @@ def inline_handler(query_pattern: str, title: str, description: str = ""):
     return decorator
 
 def check_module_dependencies(module_name: str) -> dict:
-    """
-    Проверяет зависимости модуля без полной загрузки.
-    """
     try:
         importlib.import_module(f"modules.{module_name}")
         return {"status": "ok"}
@@ -114,42 +147,19 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
                 break
         search_target = module_instance if module_instance else imported_module
         
-        # Импорт БД для работы с алиасами
-        from utils import database as db
-
         for name, func in inspect.getmembers(search_target):
             if not (inspect.isfunction(func) or inspect.ismethod(func)):
                 continue
 
             if getattr(func, "_is_command", False):
                 command_name, handler_args, doc = func._command_name, func._command_kwargs, func._command_doc
-                
-                # 1. Регистрация основной команды
                 pattern_text = re.escape(PREFIX) + command_name + r"(?:\s+(.*))?$"
                 handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
                 handler = events.NewMessage(**handler_args)
                 client.add_event_handler(func, handler)
                 registered_handlers.append((func, handler))
-                
                 if command_name not in COMMANDS_REGISTRY: COMMANDS_REGISTRY[command_name] = []
                 COMMANDS_REGISTRY[command_name].append({"module": module_name, "doc": doc or "Нет описания"})
-
-                # 2. --- НОВОЕ: Регистрация алиасов ---
-                try:
-                    aliases = db.get_aliases_by_command(command_name)
-                    for alias in aliases:
-                        alias_pattern_text = re.escape(PREFIX) + alias + r"(?:\s+(.*))?$"
-                        
-                        # Копируем аргументы для алиаса
-                        alias_handler_args = handler_args.copy()
-                        alias_handler_args["pattern"] = re.compile(alias_pattern_text, re.IGNORECASE | re.DOTALL)
-                        
-                        alias_handler = events.NewMessage(**alias_handler_args)
-                        client.add_event_handler(func, alias_handler)
-                        registered_handlers.append((func, alias_handler))
-                except Exception as e:
-                    print(f"Ошибка при загрузке алиаса для {command_name}: {e}")
-                # ------------------------------------
 
             if getattr(func, "_is_watcher", False):
                 handler_args = func._watcher_kwargs.copy()
@@ -175,14 +185,13 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
         
         return {"status": "ok", "message": f"Модуль {module_name} успешно загружен."}
 
-    except (ImportError, ModuleNotFoundError) as e:
-        traceback.print_exc()
-        if "No module named" in str(e) and module_name.lower() != module_name:
-             return {"status": "error", "message": f"Ошибка: {e}. Возможно, имя модуля должно быть в нижнем регистре: `{module_name.lower()}`"}
-        return {"status": "error", "message": f"Ошибка при загрузке {module_name}:\n{e}"}
     except Exception as e:
-        traceback.print_exc()
-        return {"status": "error", "message": f"Ошибка при загрузке {module_name}:\n{e}"}
+        # Возвращаем traceback для modules.py
+        return {
+            "status": "error", 
+            "message": f"Ошибка при загрузке {module_name}:\n{e}", 
+            "traceback": traceback.format_exc()
+        }
 
 async def unload_module(client, module_name: str) -> dict:
     """Выгружает модуль из памяти."""
@@ -215,10 +224,13 @@ async def unload_module(client, module_name: str) -> dict:
 
         return {"status": "ok", "message": f"Модуль {module_name} успешно выгружен."}
     except Exception as e:
-        return {"status": "error", "message": f"Ошибка при выгрузке {module_name}:\n{e}"}
+        return {
+            "status": "error", 
+            "message": f"Ошибка при выгрузке {module_name}:\n{e}",
+            "traceback": traceback.format_exc()
+        }
 
 async def reload_module(client, module_name: str, chat_id: int = None) -> dict:
-    """Перезагружает модуль."""
     unload_result = await unload_module(client, module_name)
     if unload_result["status"] == "error":
         return unload_result
@@ -226,14 +238,11 @@ async def reload_module(client, module_name: str, chat_id: int = None) -> dict:
     return await load_module(client, module_name, chat_id)
 
 def get_all_modules() -> list[str]:
-    """Рекурсивно ищет все .py файлы в папке modules и ее подпапках."""
     all_modules = []
     for path in MODULES_DIR.rglob("*.py"):
         if path.name.startswith("_"):
             continue
-        
         relative_path = path.relative_to(MODULES_DIR)
         import_path = ".".join(relative_path.with_suffix("").parts)
         all_modules.append(import_path)
-        
     return all_modules
