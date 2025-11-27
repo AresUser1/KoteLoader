@@ -1,7 +1,7 @@
 # modules/help.py
 """
 <manifest>
-version: 1.1.4
+version: 1.1.6
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/help.py
 author: Kote
 </manifest>
@@ -24,7 +24,7 @@ SQUARE_EMOJI_ID_USER = 4974508259839836856
 INFO_EMOJI_ID = 5879813604068298387  
 USAGE_EMOJI_ID = 5197195523794157505  
 
-SYSTEM_MODULES = ["admin", "help", "install", "modules", "updater", "ping", "profile", "config", "hider", "power", "git_manager", "core_updater", "about", "aliases", "twins"]
+SYSTEM_MODULES = ["admin", "help", "install", "modules", "updater", "ping", "profile", "config", "hider", "power", "git_manager", "core_updater", "about", "aliases", "twins", "private"]
 
 @register("help", incoming=True)
 async def help_cmd(event):
