@@ -1,8 +1,8 @@
 # modules/private.py
 """
 <manifest>
-version: 1.0.3
-source: local
+version: 1.0.4
+source: https://github.com/AresUser1/KoteLoader/raw/main/modules/private.py
 author: Kote
 </manifest>
 
