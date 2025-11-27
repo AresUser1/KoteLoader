@@ -1,13 +1,13 @@
 # modules/install.py
 """
 <manifest>
-version: 1.2.1
+version: 2.0.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
 </manifest>
 
 Управление модулями: установка, удаление, скачивание.
-Поддерживает нечувствительный к регистру поиск файлов.
+Включает защиту от даунгрейда системных модулей и проверку версии ядра.
 """
 
 import os
@@ -26,6 +26,9 @@ from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold, Messa
 from services.module_info_cache import parse_manifest
 from utils.loader import get_all_modules
 
+# --- Настройки ядра ---
+CURRENT_CORE_VERSION = "2.0.0" # Версия текущей сборки
+
 SUCCESS_EMOJI_ID = 5255813619702049821
 FOLDER_EMOJI_ID = 5256113064821926998
 TRASH_EMOJI_ID = 5255831443816327915
@@ -34,59 +37,39 @@ PAW_EMOJI_ID = 5084923566848213749
 SECURITY_INFO_ID = 5879785854284599288
 SECURITY_BLOCK_ID = 5778527486270770928
 SECURITY_WARN_ID = 5881702736843511327
+LOCK_EMOJI_ID = 5778570255555105942
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 
 def _find_module_path(user_input: str) -> Path | None:
-    """
-    Ищет путь к файлу или папке модуля, игнорируя регистр.
-    Поддерживает точки как разделители.
-    """
     if not user_input: return None
-    
-    # 1. Пробуем прямой путь (если ввели точно)
     direct_path = MODULES_DIR / user_input
     if direct_path.exists(): return direct_path
-    
     direct_path_py = direct_path.with_suffix(".py")
     if direct_path_py.exists(): return direct_path_py
-    
-    # 2. Пробуем через реестр модулей (поиск имени)
-    # Это поможет найти правильный регистр (например, 'weather' из 'Weather')
     all_modules = get_all_modules()
     target_name = None
-    
     user_input_clean = user_input.lower().replace("_", "")
-    
     for mod in all_modules:
-        # Сравнение: weather == weather
         if mod.lower() == user_input.lower():
             target_name = mod
             break
-        # Сравнение: spamtwins == spam_twins
         if mod.lower().replace("_", "") == user_input_clean:
             target_name = mod
             break
-            
     if target_name:
-        # Превращаем имя модуля обратно в путь
-        # module.submodule -> module/submodule.py
         parts = target_name.split(".")
         current = MODULES_DIR
         for part in parts[:-1]:
             current = current / part
-        
-        # Проверяем файл .py
         candidate_file = current / (parts[-1] + ".py")
         if candidate_file.exists(): return candidate_file
-        
-        # Проверяем папку (пакет)
         candidate_dir = current / parts[-1]
         if candidate_dir.exists(): return candidate_dir
-
     return None
 
 def compare_versions(ver1, ver2):
+    """Возвращает True, если ver1 > ver2 (новая > старой)."""
     try:
         v1 = list(map(int, ver1.split('.')))
         v2 = list(map(int, ver2.split('.')))
@@ -170,34 +153,66 @@ async def process_and_install(event, file_name, content, source_url=None, force=
     module_name = file_name[:-3]
     module_path = MODULES_DIR / file_name
     
+    # Парсим новый манифест сразу
+    new_manifest = parse_manifest(content)
+    
+    # 1. ПРОВЕРКА ВЕРСИИ ЯДРА (Min Core Version)
+    min_core = new_manifest.get("min_core")
+    if min_core:
+        if compare_versions(min_core, CURRENT_CORE_VERSION):
+            return await build_and_edit(event, [
+                {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_BLOCK_ID}},
+                {"text": " Ошибка совместимости!\n", "entity": MessageEntityBold},
+                {"text": f"Модуль требует ядро версии "},
+                {"text": f"{min_core}", "entity": MessageEntityCode},
+                {"text": f", а у вас "},
+                {"text": f"{CURRENT_CORE_VERSION}", "entity": MessageEntityCode},
+                {"text": ". Обновите бота."}
+            ])
+
+    # Импортируем список защищенных модулей
+    try:
+        from modules.modules import PROTECTED_MODULES
+    except ImportError:
+        PROTECTED_MODULES = []
+
+    # 2. ПРОВЕРКА ВЕРСИЙ МОДУЛЯ (Anti-Rollback)
     version_msg = ""
-    if module_path.exists() and not force:
+    if module_path.exists():
         try:
             with open(module_path, 'r', encoding='utf-8') as f:
                 current_content = f.read()
             
             current_manifest = parse_manifest(current_content)
-            new_manifest = parse_manifest(content)
             
             curr_ver = current_manifest.get("version", "0.0.0")
             new_ver = new_manifest.get("version", "0.0.0")
             
+            # Если модуль защищенный и версия НИЖЕ текущей - БЛОКИРУЕМ
+            if module_name in PROTECTED_MODULES:
+                if compare_versions(curr_ver, new_ver): # curr > new
+                     return await build_and_edit(event, [
+                        {"text": "🔒", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": LOCK_EMOJI_ID}},
+                        {"text": " Откат запрещен!\n", "entity": MessageEntityBold},
+                        {"text": f"Вы пытаетесь установить старую версию ({new_ver}) системного модуля поверх новой ({curr_ver}). Это действие заблокировано."}
+                    ])
+            
             if compare_versions(new_ver, curr_ver):
-                force = True 
+                force = True # Авто-апдейт разрешен, если версия выше
                 version_msg = f" (обновлено: {curr_ver} → {new_ver})"
-            else:
+            elif not force:
                 return await build_and_edit(event, [
                     {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
-                    {"text": " Модуль уже существует и версия не новее.\n", "entity": MessageEntityBold},
-                    {"text": f"Текущая: {curr_ver}, Новая: {new_ver}.\n"},
-                    {"text": f"Используйте {prefix}forceupload для перезаписи."}
+                    {"text": f" Модуль существует (v{curr_ver}). Новая версия ({new_ver}) не новее.\n", "entity": MessageEntityBold},
+                    {"text": f"Используйте {prefix}forceupload."}
                 ])
         except Exception as e:
-            return await build_and_edit(event, [
-                {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
-                {"text": f" Модуль существует. Ошибка проверки версии: {e}.\n", "entity": MessageEntityBold},
-                {"text": f"Используйте {prefix}forceupload."}
-            ])
+            if not force:
+                return await build_and_edit(event, [
+                    {"text": "⚠️", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SECURITY_WARN_ID}},
+                    {"text": f" Модуль существует. Ошибка проверки: {e}.\n", "entity": MessageEntityBold},
+                    {"text": f"Используйте {prefix}forceupload."}
+                ])
 
     if not force:
         await build_and_edit(event, [
@@ -262,151 +277,105 @@ async def process_and_install(event, file_name, content, source_url=None, force=
 @register("install", incoming=True)
 async def install_cmd(event, force=False):
     """Установить модуль по ссылке.
-    
-    Usage: {prefix}install <url>
-    """
-    if not check_permission(event, min_level="TRUSTED"):
-        return
-    
+    Usage: {prefix}install <url>"""
+    if not check_permission(event, min_level="TRUSTED"): return
     prefix = db.get_setting("prefix", default=".")
     url = (event.pattern_match.group(1) or "").strip()
-    
-    if not url.startswith("http"):
-        return await build_and_edit(event, f"❌ **Укажите полный URL. Использование: {prefix}install <url>**", parse_mode="md")
-
-    if url.endswith(".py"):
-        await _install_from_py_url(event, url, force)
-    elif "github.com" in url:
-        await _install_from_git_repo(event, url, force)
-    else:
-        await build_and_edit(event, f"**Ссылка не распознана. Использование: {prefix}install <url>**", parse_mode="md")
+    if not url.startswith("http"): return await build_and_edit(event, f"❌ **Укажите полный URL. Использование: {prefix}install <url>**", parse_mode="md")
+    if url.endswith(".py"): await _install_from_py_url(event, url, force)
+    elif "github.com" in url: await _install_from_git_repo(event, url, force)
+    else: await build_and_edit(event, f"**Ссылка не распознана. Использование: {prefix}install <url>**", parse_mode="md")
 
 @register("forceinstall", incoming=True)
 async def force_install_cmd(event):
     """Принудительная установка по ссылке.
-    
-    Usage: {prefix}forceinstall <url>
-    """
+    Usage: {prefix}forceinstall <url>"""
     await install_cmd(event, force=True)
 
 @register("upload", incoming=True)
 async def upload_module(event, force=False):
     """Установка модуля из файла.
-    
-    Usage: {prefix}upload (в ответ на файл)
-    """
-    if not check_permission(event, min_level="TRUSTED"):
-        return
-
+    Usage: {prefix}upload (в ответ на файл)"""
+    if not check_permission(event, min_level="TRUSTED"): return
     reply = await event.get_reply_message()
     message_with_file = reply if reply and reply.media else event.message
-    
-    if not message_with_file or not message_with_file.file:
-        return await build_and_edit(event, "**Отправьте .py файл или ответьте на него командой.**", parse_mode="md")
-
+    if not message_with_file or not message_with_file.file: return await build_and_edit(event, "**Отправьте .py файл или ответьте на него командой.**", parse_mode="md")
     file_name = getattr(message_with_file.file, 'name', "module.py")
-    if not file_name.endswith(".py"): 
-        return await build_and_edit(event, "**Файл должен быть .py**", parse_mode="md")
-
+    if not file_name.endswith(".py"): return await build_and_edit(event, "**Файл должен быть .py**", parse_mode="md")
     await build_and_edit(event, "🔄 **Читаю файл...**", parse_mode="md")
-    
     content = (await message_with_file.download_media(bytes)).decode('utf-8', 'ignore')
     await process_and_install(event, file_name, content, force=force)
 
 @register("forceupload", incoming=True)
 async def force_upload_module(event):
     """Принудительная установка из файла.
-    
-    Usage: {prefix}forceupload (в ответ на файл)
-    """
+    Usage: {prefix}forceupload (в ответ на файл)"""
     await upload_module(event, force=True)
 
 @register("getm", incoming=True)
 async def get_module_cmd(event):
     """Получить файл модуля.
-    
-    Usage: {prefix}getm <название>
-    """
-    if not check_permission(event, min_level="TRUSTED"):
-        return
-
+    Usage: {prefix}getm <название>"""
+    if not check_permission(event, min_level="TRUSTED"): return
     module_name = event.pattern_match.group(1)
-    if not module_name:
-        return await build_and_edit(event, "**Укажите имя модуля.**", parse_mode="md")
+    if not module_name: return await build_and_edit(event, "**Укажите имя модуля.**", parse_mode="md")
 
-    # Используем новую функцию поиска
+    # ❗️ ЗАЩИТА ОТ КОПИРОВАНИЯ ❗️
+    from modules.modules import PROTECTED_MODULES
+    if module_name.lower() in PROTECTED_MODULES:
+        return await build_and_edit(event, [
+            {"text": "🔒", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": LOCK_EMOJI_ID}},
+            {"text": " Ошибка: ", "entity": MessageEntityBold},
+            {"text": f"Модуль ", "entity": MessageEntityBold},
+            {"text": module_name, "entity": MessageEntityCode},
+            {"text": " защищен от копирования.", "entity": MessageEntityBold}
+        ])
+
     module_path = _find_module_path(module_name)
-
-    if not module_path:
-        return await build_and_edit(event, f"❌ **Модуль `{module_name}` не найден.**", parse_mode="md")
-
+    if not module_path: return await build_and_edit(event, f"❌ **Модуль `{module_name}` не найден.**", parse_mode="md")
     prefix = db.get_setting("prefix", default=".")
-    
-    parts = [
-        {"text": "📁", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": FOLDER_EMOJI_ID}},
-        {"text": " Файл модуля ", "entity": MessageEntityBold},
-        {"text": f"{module_path.name}", "entity": MessageEntityCode},
-        {"text": "\n\n"},
-        {"text": "🐾", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": PAW_EMOJI_ID}},
-        {"text": " "},
-        {"text": f"{prefix}upload", "entity": MessageEntityCode},
-        {"text": " в ответ на это сообщение для быстрой установки", "entity": MessageEntityBold},
-    ]
+    parts = [{"text": "📁", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": FOLDER_EMOJI_ID}}, {"text": " Файл модуля ", "entity": MessageEntityBold}, {"text": f"{module_path.name}", "entity": MessageEntityCode}, {"text": "\n\n"}, {"text": "🐾", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": PAW_EMOJI_ID}}, {"text": " "}, {"text": f"{prefix}upload", "entity": MessageEntityCode}, {"text": " в ответ на это сообщение для быстрой установки", "entity": MessageEntityBold}]
     caption, entities = build_message(parts)
-
-    await event.client.send_file(
-        event.chat_id,
-        file=module_path,
-        caption=caption,
-        formatting_entities=entities,
-        reply_to=event.id
-    )
-    
-    if event.out:
-        await event.delete()
+    await event.client.send_file(event.chat_id, file=module_path, caption=caption, formatting_entities=entities, reply_to=event.id)
+    if event.out: await event.delete()
 
 @register("delm", incoming=True)
 async def remove_module(event):
     """Удалить модуль.
-    
-    Usage: {prefix}delm <название>
-    """
-    if not check_permission(event, min_level="TRUSTED"):
-        return
-        
+    Usage: {prefix}delm <название>"""
+    if not check_permission(event, min_level="TRUSTED"): return
     name_to_remove = (event.pattern_match.group(1) or "").strip()
-    if not name_to_remove:
-        return await build_and_edit(event, "**Укажите имя модуля или пакета для удаления.**", parse_mode="md")
-
-    # Используем новую функцию поиска
-    path_to_remove = _find_module_path(name_to_remove)
-
-    if not path_to_remove:
-        return await build_and_edit(event, f"❌ **Ресурс `{name_to_remove}` не найден.**", parse_mode="md")
+    if not name_to_remove: return await build_and_edit(event, "**Укажите имя модуля или пакета для удаления.**", parse_mode="md")
     
+    path_to_remove = _find_module_path(name_to_remove)
+    if not path_to_remove: return await build_and_edit(event, f"❌ **Ресурс `{name_to_remove}` не найден.**", parse_mode="md")
+    
+    # ❗️ ЗАЩИТА ОТ УДАЛЕНИЯ ❗️
+    from modules.modules import PROTECTED_MODULES
+    module_clean_name = path_to_remove.stem
+    if module_clean_name in PROTECTED_MODULES:
+         return await build_and_edit(event, [
+            {"text": "🔒", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": LOCK_EMOJI_ID}},
+            {"text": " Ошибка: ", "entity": MessageEntityBold},
+            {"text": f"Модуль ", "entity": MessageEntityBold},
+            {"text": module_clean_name, "entity": MessageEntityCode},
+            {"text": " защищен от удаления.", "entity": MessageEntityBold}
+        ])
+
     try:
         if path_to_remove.is_dir():
             shutil.rmtree(path_to_remove)
             all_module_names_in_db = db.get_modules_stats().keys()
             for mod_name in all_module_names_in_db:
-                if mod_name.startswith(name_to_remove + "."):
-                    db.clear_module(mod_name)
+                if mod_name.startswith(name_to_remove + "."): db.clear_module(mod_name)
         else:
             from utils.loader import unload_module
-            # Вычисляем имя модуля для выгрузки: path/modules/Name.py -> Name
             try:
                 rel_path = path_to_remove.relative_to(MODULES_DIR)
                 module_name = ".".join(rel_path.with_suffix("").parts)
-            except ValueError:
-                 # Фалбэк, если файл вне папки modules (маловероятно)
-                 module_name = path_to_remove.stem
-
-            if hasattr(event.client, 'modules') and module_name in event.client.modules:
-                await unload_module(event.client, module_name)
+            except ValueError: module_name = path_to_remove.stem
+            if hasattr(event.client, 'modules') and module_name in event.client.modules: await unload_module(event.client, module_name)
             path_to_remove.unlink()
             db.clear_module(module_name)
-            
         await build_and_edit(event, f"✅ **Ресурс `{path_to_remove.name}` успешно удален!**", parse_mode="md")
-        
-    except Exception as e:
-        await build_and_edit(event, f"❌ **Ошибка при удалении:**\n`{traceback.format_exc()}`", parse_mode="md")
+    except Exception as e: await build_and_edit(event, f"❌ **Ошибка при удалении:**\n`{traceback.format_exc()}`", parse_mode="md")
