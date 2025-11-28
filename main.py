@@ -27,12 +27,15 @@ except ImportError as e:
 
 START_TIME = time.time()
 
+async def heartbeat():
+    while True:
+        await asyncio.sleep(60)
+        print("💓 System Pulse: OK") 
+
 async def ensure_inline_mode_enabled(user_client, bot_username):
     try:
         print(f"🔄 Проверяем настройки inline-режима для @{bot_username}...")
-        # Используем exclusive=False, чтобы не конфликтовать с другими диалогами
         async with user_client.conversation('@BotFather', timeout=40, exclusive=False) as conv:
-            # На всякий случай сбрасываем состояние BotFather
             await conv.send_message('/cancel')
             await asyncio.sleep(0.5)
             
@@ -50,7 +53,6 @@ async def ensure_inline_mode_enabled(user_client, bot_username):
             elif "Success" in resp.text:
                 print(f"✅ Inline-режим для @{bot_username} уже активен.")
             else:
-                # Иногда BotFather пишет что-то нестандартное, выводим первую строку
                 print(f"ℹ️ Ответ BotFather: {resp.text.splitlines()[0]}")
                  
     except Exception as e:
@@ -222,11 +224,10 @@ async def start_clients():
         try:
             bot_info = await bot_client.get_me()
             
-            # --- ВАЖНО: Принудительная проверка inline-режима ПРИ КАЖДОМ ЗАПУСКЕ ---
-            # Делаем паузу, чтобы Telethon не ругался на флуд/конфликты, если только что создали бота
             await asyncio.sleep(1) 
             await ensure_inline_mode_enabled(user_client, bot_info.username)
             
+            # Отправка start самому себе, чтобы бот появился в диалогах
             await user_client.send_message(bot_info.username, "/start")
         except Exception as e:
              print(f"⚠️ Небольшая ошибка при инициализации диалога с ботом: {e}")
@@ -262,7 +263,8 @@ async def main():
     print("\n🟢 KoteLoader полностью запущен! Напишите .help в чате.")
     
     try:
-        tasks = [worker_task, user_client.run_until_disconnected()]
+        # Добавляем heartbeat в список задач
+        tasks = [worker_task, user_client.run_until_disconnected(), heartbeat()]
         if bot_client: 
             tasks.append(bot_client.run_until_disconnected())
         await asyncio.gather(*tasks)
