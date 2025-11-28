@@ -7,27 +7,26 @@ from typing import Any, Dict, Optional
 DB_FILE = Path(__file__).parent.parent / "database.db"
 connection = None
 
+# --- КЭШИ В ПАМЯТИ (Для скорости) ---
+_settings_cache: Dict[str, str] = {}
+_users_cache: Dict[int, str] = {}
+_users_list_cache: Dict[str, list] = {}
+_aliases_cache: list = []  # Кэш для списка всех алиасов
 
 def db_connect():
-    """Устанавливает соединение с базой данных в режиме автокоммита."""
+    """Устанавливает соединение с базой данных."""
     global connection
     if connection is None:
-        connection = sqlite3.connect(DB_FILE, isolation_level=None)
+        # check_same_thread=False нужен для работы с асинхронностью Telethon
+        connection = sqlite3.connect(DB_FILE, isolation_level=None, check_same_thread=False)
         connection.row_factory = sqlite3.Row
     return connection
 
-
 def init_hidden_modules_table():
-    """Создает таблицу для скрытых модулей, если она не существует."""
     cursor = connection.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS hidden_modules (
-            module_name TEXT PRIMARY KEY
-        )
-    """)
+    cursor.execute("CREATE TABLE IF NOT EXISTS hidden_modules (module_name TEXT PRIMARY KEY)")
 
 def init_aliases_table():
-    """Создает таблицу алиасов, если она не существует."""
     cursor = connection.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS aliases (
@@ -37,9 +36,32 @@ def init_aliases_table():
         )
     """)
 
+def _warmup_cache():
+    """Загружает часто используемые данные в память при старте."""
+    print("🔥 Прогрев кэша базы данных...")
+    cursor = connection.cursor()
+    
+    # 1. Кэшируем настройки
+    cursor.execute("SELECT key, value FROM settings")
+    for row in cursor.fetchall():
+        _settings_cache[row['key']] = row['value']
+
+    # 2. Кэшируем пользователей
+    cursor.execute("SELECT user_id, level FROM users")
+    for row in cursor.fetchall():
+        uid, lvl = row['user_id'], row['level']
+        _users_cache[uid] = lvl
+        if lvl not in _users_list_cache:
+            _users_list_cache[lvl] = []
+        _users_list_cache[lvl].append(uid)
+
+    # 3. Кэшируем алиасы
+    global _aliases_cache
+    cursor.execute("SELECT * FROM aliases")
+    _aliases_cache = [dict(row) for row in cursor.fetchall()]
 
 def init_db():
-    """Инициализирует базу данных, создает основные таблицы."""
+    """Инициализирует базу данных, создает таблицы и заполняет кэш."""
     print("Инициализация базы данных...")
     db = db_connect()
     cursor = db.cursor()
@@ -64,58 +86,62 @@ def init_db():
         ON module_storage(module_name, storage_key, storage_type, user_id, chat_id)
     """)
     
-    # Инициализация таблиц
     init_hidden_modules_table()
-    init_aliases_table() # <--- НОВОЕ
+    init_aliases_table()
     
-    print("База данных готова.")
+    _warmup_cache()
+    
+    print("✅ База данных готова и закэширована.")
 
+# --- РАБОТА С НАСТРОЙКАМИ (через кэш) ---
 
 def get_setting(key: str, default: str = None) -> str:
-    """Получает значение настройки по ключу."""
-    cursor = connection.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-    result = cursor.fetchone()
-    return result['value'] if result else default
-
+    return _settings_cache.get(key, default)
 
 def set_setting(key: str, value: str):
-    """Устанавливает значение настройки."""
+    _settings_cache[key] = value
     cursor = connection.cursor()
     cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
+# --- РАБОТА С ПОЛЬЗОВАТЕЛЯМИ (через кэш) ---
 
 def add_user(user_id: int, level: str):
-    """Добавляет или обновляет уровень доступа пользователя."""
+    _users_cache[user_id] = level
+    # Сбрасываем списки, так как состав изменился
+    global _users_list_cache
+    _users_list_cache = {} 
+    
     cursor = connection.cursor()
     cursor.execute("INSERT OR REPLACE INTO users (user_id, level) VALUES (?, ?)", (user_id, level))
 
-
 def remove_user(user_id: int):
-    """Удаляет пользователя из таблицы доступа."""
+    if user_id in _users_cache:
+        del _users_cache[user_id]
+        
+    global _users_list_cache
+    _users_list_cache = {}
+    
     cursor = connection.cursor()
     cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
 
-
 def get_user_level(user_id: int) -> str:
-    """Получает уровень доступа пользователя."""
-    cursor = connection.cursor()
-    cursor.execute("SELECT level FROM users WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    return result['level'] if result else "USER"
-
+    return _users_cache.get(user_id, "USER")
 
 def get_users_by_level(level: str) -> list:
-    """Получает список ID пользователей с указанным уровнем."""
+    if level in _users_list_cache:
+        return _users_list_cache[level]
+    
+    # Если в кэше пусто (например, после сброса), читаем из БД
     cursor = connection.cursor()
     cursor.execute("SELECT user_id FROM users WHERE level = ?", (level,))
-    return [row['user_id'] for row in cursor.fetchall()]
+    res = [row['user_id'] for row in cursor.fetchall()]
+    _users_list_cache[level] = res
+    return res
 
-# --- Работа с данными модулей ---
+# --- РАБОТА С ДАННЫМИ МОДУЛЕЙ (Напрямую в БД, JSON сложно кэшировать) ---
 
 def _store_module_data(module_name: str, key: str, value: Any, storage_type: str = 'data', user_id: int = 0,
                        chat_id: int = 0):
-    """Внутренняя функция для сохранения данных модуля с корректным обновлением."""
     cursor = connection.cursor()
     value_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
 
@@ -132,10 +158,8 @@ def _store_module_data(module_name: str, key: str, value: Any, storage_type: str
             VALUES (?, ?, ?, ?, ?, ?)
         """, (module_name, key, value_str, storage_type, user_id, chat_id))
 
-
 def _get_module_data(module_name: str, key: str, storage_type: str = 'data', default: Any = None, user_id: int = 0,
                      chat_id: int = 0) -> Any:
-    """Внутренняя функция для получения данных модуля."""
     cursor = connection.cursor()
     cursor.execute("""
         SELECT storage_value FROM module_storage 
@@ -148,22 +172,17 @@ def _get_module_data(module_name: str, key: str, storage_type: str = 'data', def
     except (json.JSONDecodeError, TypeError):
         return result['storage_value']
 
-
 def set_module_config(module_name: str, config_key: str, config_value: Any, user_id: int = 0):
     _store_module_data(module_name, config_key, config_value, 'config', user_id, 0)
-
 
 def get_module_config(module_name: str, config_key: str, default: Any = None, user_id: int = 0) -> Any:
     return _get_module_data(module_name, config_key, 'config', default, user_id, 0)
 
-
 def set_module_data(module_name: str, data_key: str, data_value: Any, user_id: int = 0, chat_id: int = 0):
     _store_module_data(module_name, data_key, data_value, 'data', user_id, chat_id)
 
-
 def get_module_data(module_name: str, data_key: str, default: Any = None, user_id: int = 0, chat_id: int = 0) -> Any:
     return _get_module_data(module_name, data_key, 'data', default, user_id, chat_id)
-
 
 def get_all_module_configs(module_name: str, user_id: int = 0) -> Dict[str, Any]:
     cursor = connection.cursor()
@@ -179,7 +198,6 @@ def get_all_module_configs(module_name: str, user_id: int = 0) -> Dict[str, Any]
             configs[row['storage_key']] = row['storage_value']
     return configs
 
-
 def get_all_module_data(module_name: str, user_id: int = 0, chat_id: int = 0) -> Dict[str, Any]:
     cursor = connection.cursor()
     cursor.execute("""
@@ -194,7 +212,6 @@ def get_all_module_data(module_name: str, user_id: int = 0, chat_id: int = 0) ->
             data[row['storage_key']] = row['storage_value']
     return data
 
-
 def remove_module_config(module_name: str, config_key: str = None, user_id: int = 0):
     cursor = connection.cursor()
     if config_key:
@@ -204,7 +221,6 @@ def remove_module_config(module_name: str, config_key: str = None, user_id: int 
     else:
         cursor.execute("DELETE FROM module_storage WHERE module_name = ? AND storage_type = 'config' AND user_id = ?",
                        (module_name, user_id))
-
 
 def remove_module_data(module_name: str, data_key: str = None, user_id: int = 0, chat_id: int = 0):
     cursor = connection.cursor()
@@ -217,16 +233,12 @@ def remove_module_data(module_name: str, data_key: str = None, user_id: int = 0,
             "DELETE FROM module_storage WHERE module_name = ? AND storage_type = 'data' AND user_id = ? AND chat_id = ?",
             (module_name, user_id, chat_id))
 
-
 def clear_module(module_name: str):
-    """Полностью очищает все данные модуля (config + data)."""
     cursor = connection.cursor()
     cursor.execute("DELETE FROM module_storage WHERE module_name = ?", (module_name,))
     print(f"🗑️ Все данные модуля '{module_name}' удалены.")
 
-
 def get_modules_stats() -> Dict[str, Dict]:
-    """Возвращает статистику по всем модулям."""
     cursor = connection.cursor()
     cursor.execute("""
         SELECT module_name, storage_type, COUNT(*) as entries_count, MAX(updated_at) as last_updated
@@ -245,9 +257,7 @@ def get_modules_stats() -> Dict[str, Dict]:
             stats[module]['last_activity'] = row['last_updated']
     return stats
 
-
 def get_all_module_sources() -> Dict[str, str]:
-    """Получает словарь со всеми модулями и их URL-источниками."""
     cursor = connection.cursor()
     cursor.execute(
         "SELECT module_name, storage_value FROM module_storage WHERE storage_type = 'config' AND storage_key = 'source_url'")
@@ -256,51 +266,46 @@ def get_all_module_sources() -> Dict[str, str]:
         sources[row['module_name']] = row['storage_value']
     return sources
 
-
 def hide_module(module_name: str):
     cursor = connection.cursor()
     cursor.execute("INSERT OR IGNORE INTO hidden_modules (module_name) VALUES (?)", (module_name,))
 
-
 def unhide_module(module_name: str):
     cursor = connection.cursor()
     cursor.execute("DELETE FROM hidden_modules WHERE module_name = ?", (module_name,))
-
 
 def get_hidden_modules() -> list:
     cursor = connection.cursor()
     cursor.execute("SELECT module_name FROM hidden_modules")
     return [row['module_name'] for row in cursor.fetchall()]
 
+# --- ФУНКЦИИ АЛИАСОВ (С кэшированием) ---
 
-# --- ФУНКЦИИ АЛИАСОВ (НОВЫЕ) ---
+def _refresh_aliases_cache():
+    global _aliases_cache
+    cursor = connection.cursor()
+    cursor.execute("SELECT * FROM aliases")
+    _aliases_cache = [dict(row) for row in cursor.fetchall()]
 
 def add_alias(alias: str, real_command: str, module_name: str):
-    """Добавляет новый алиас."""
     cursor = connection.cursor()
     cursor.execute("INSERT OR REPLACE INTO aliases (alias, real_command, module_name) VALUES (?, ?, ?)", 
                    (alias, real_command, module_name))
+    _refresh_aliases_cache()
 
 def remove_alias(alias: str):
-    """Удаляет алиас."""
     cursor = connection.cursor()
     cursor.execute("DELETE FROM aliases WHERE alias = ?", (alias,))
+    _refresh_aliases_cache()
 
 def get_aliases_by_command(real_command: str) -> list:
-    """Возвращает список алиасов для конкретной команды."""
-    cursor = connection.cursor()
-    cursor.execute("SELECT alias FROM aliases WHERE real_command = ?", (real_command,))
-    return [row['alias'] for row in cursor.fetchall()]
+    # Ищем в кэше
+    return [item['alias'] for item in _aliases_cache if item['real_command'] == real_command]
 
 def get_all_aliases() -> list:
-    """Возвращает все алиасы."""
-    cursor = connection.cursor()
-    cursor.execute("SELECT * FROM aliases")
-    return cursor.fetchall()
-
+    return _aliases_cache
 
 def close_db():
-    """Корректно закрывает соединение с базой данных."""
     global connection
     if connection is not None:
         connection.close()
