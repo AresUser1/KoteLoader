@@ -30,7 +30,7 @@ START_TIME = time.time()
 async def heartbeat():
     while True:
         await asyncio.sleep(60)
-        print("💓 System Pulse: OK") 
+        # print("💓 System Pulse: OK") 
 
 async def ensure_inline_mode_enabled(user_client, bot_username):
     try:
