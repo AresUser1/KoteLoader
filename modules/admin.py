@@ -1,63 +1,113 @@
+
 # modules/admin.py
 """
 <manifest>
-version: 1.1.2
+version: 1.3.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 </manifest>
 
-Модуль для управления ядром бота,доступом и базой данных.
+Модуль для управления ядром бота, доступом и базой данных.
+Включает аварийный сброс префикса с авто-рестартом.
 """
 
 import os
 import sys
-import shutil
 import zipfile
 import asyncio
 import time
 from pathlib import Path
 from datetime import datetime
-from core import register, inline_handler, callback_handler
+from core import register, watcher
 from utils import database as db
 from utils.message_builder import build_and_edit, utf16len
 from utils.security import check_permission
-from handlers.user_commands import _call_inline_bot
 from telethon.tl.types import (
     MessageEntityCode, MessageEntityBold, MessageEntityTextUrl, 
-    MessageEntityBlockquote, MessageEntityItalic
+    MessageEntityBlockquote, MessageEntityItalic, MessageEntityCustomEmoji
 )
-from telethon.tl.custom import Button
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
 
+@watcher(outgoing=True)
+async def emergency_reset_prefix(event):
+    """
+    Аварийный сброс префикса + Автоматический рестарт.
+    Срабатывает ТОЛЬКО на '.resetprefix', независимо от текущего префикса.
+    """
+    # Проверяем точное совпадение текста сообщения
+    if event.message and event.message.text and event.message.text.strip() == ".resetprefix":
+        if not check_permission(event, min_level="OWNER"):
+            return
+
+        # 1. Сбрасываем настройку в базе данных
+        db.set_setting("prefix", ".")
+        
+        # 2. Обновляем переменную в текущей сессии (на всякий случай)
+        from utils import loader
+        loader.PREFIX = "."
+        
+        # 3. Уведомляем пользователя
+        await build_and_edit(event, [
+            {"text": "✅"},
+            {"text": " Префикс сброшен на ", "entity": MessageEntityBold},
+            {"text": ".", "entity": MessageEntityCode},
+            {"text": "! Перезагрузка...", "entity": MessageEntityItalic}
+        ])
+        
+        # 4. Сохраняем флаги для отчета после рестарта
+        if event.out:
+            db.set_setting("restart_report_chat_id", str(event.chat_id))
+            db.set_setting("restart_start_time", str(time.time()))
+        
+        # 5. Жесткий перезапуск процесса
+        await asyncio.sleep(1) # Даем время сообщению отправиться
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
 @register("prefix", incoming=True)
-async def set_prefix(event):
-    """Показать или изменить префикс.
+async def show_prefix(event):
+    """Показать текущий префикс.
     
-    Usage: {prefix}prefix [новый_знак]
+    Usage: {prefix}prefix
     """
     if not check_permission(event, min_level="TRUSTED"):
         return
         
     prefix = db.get_setting("prefix", default=".")
-    args = event.message.text.split(maxsplit=1)
-    
-    if len(args) < 2:
-        await build_and_edit(event, [
-            {"text": "Текущий префикс: "},
-            {"text": f"{prefix}", "entity": MessageEntityCode},
-            {"text": "\n\n"},
-            {"text": f"🔧 Для смены: {prefix}prefix <новый_префикс>", "entity": MessageEntityCode}
-        ])
-        return
+    await build_and_edit(event, [
+        {"text": "ℹ️ Текущий префикс: "},
+        {"text": f"{prefix}", "entity": MessageEntityCode},
+        {"text": "\n\n"},
+        {"text": f"Для смены: .setprefix\nАварийный сброс: .resetprefix", "entity": MessageEntityItalic}
+    ])
 
-    new_prefix = args[1]
+@register("setprefix", incoming=True)
+async def change_prefix(event):
+    """Изменить префикс команд.
+    
+    Usage: {prefix}setprefix <новый_знак>
+    """
+    if not check_permission(event, min_level="OWNER"):
+        return
+        
+    args = event.message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return await build_and_edit(event, [{"text": "❌ Укажите новый префикс!"}])
+
+    new_prefix = args[1].strip()
+    if not new_prefix:
+         return await build_and_edit(event, [{"text": "❌ Префикс не может быть пустым."}])
+
     db.set_setting("prefix", new_prefix)
+    
+    from utils import loader
+    loader.PREFIX = new_prefix
+    
     await build_and_edit(event, [
         {"text": "✅"},
         {"text": " Префикс изменен на ", "entity": MessageEntityBold},
         {"text": f"{new_prefix}", "entity": MessageEntityCode},
-        {"text": f".\n\nЧтобы изменения вступили в силу, используйте команду {prefix}restart", "entity": MessageEntityCode}
+        {"text": ".\n\nРекомендуется выполнить .restart"}
     ])
 
 @register("restart", incoming=True)
@@ -421,7 +471,8 @@ async def backup_modules_cmd(event):
                 for file_path in MODULES_DIR.rglob("*"):
                     if "__pycache__" in file_path.parts or ".git" in file_path.parts:
                         continue
-                    zipf.write(file_path, file_path.relative_to(MODULES_DIR.parent))
+                    if file_path.is_file():
+                        zipf.write(file_path, file_path.relative_to(MODULES_DIR.parent))
 
         await asyncio.to_thread(create_zip)
 
