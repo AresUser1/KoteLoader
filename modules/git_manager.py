@@ -1,7 +1,7 @@
 # modules/git_manager.py
 """
 <manifest>
-version: 1.0.5
+version: 1.0.6
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/git_manager.py
 author: Kote
 </manifest>
@@ -15,6 +15,7 @@ import json
 import re
 import base64
 from pathlib import Path
+from typing import Optional
 
 from core import register
 from utils import database as db
