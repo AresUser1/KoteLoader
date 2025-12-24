@@ -1,7 +1,7 @@
 # modules/modules.py
 """
 <manifest>
-version: 2.0.2
+version: 2.0.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/modules.py
 author: Kote
 </manifest>
@@ -14,6 +14,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 import re
 from core import register
 from utils import database as db
