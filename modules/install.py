@@ -1,7 +1,7 @@
 # modules/install.py
 """
 <manifest>
-version: 2.0.1
+version: 2.0.2
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
 </manifest>
@@ -17,6 +17,7 @@ import asyncio
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
+from typing import Optional
 
 from core import register
 from utils import database as db
