@@ -1,7 +1,7 @@
 # modules/modules.py
 """
 <manifest>
-version: 2.0.3
+version: 2.0.4
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/modules.py
 author: Kote
 </manifest>
@@ -31,9 +31,7 @@ BACKUPS_DIR = Path(__file__).parent.parent / "backups"
 
 # --- СПИСОК ЗАЩИЩЕННЫХ МОДУЛЕЙ ---
 # Эти модули нельзя выгрузить (.unload) и нельзя скачать (.getm)
-PROTECTED_MODULES = [
-    "combat_twins", "private"
-]
+PROTECTED_MODULES = []
 
 # Используем тот же список для отображения в разделе "Системные"
 SYSTEM_MODULE_NAMES = PROTECTED_MODULES
