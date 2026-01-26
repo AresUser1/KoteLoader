@@ -1,7 +1,13 @@
 # modules/aliases.py
 """
-Модуль для создания псевдонимов (алиасов) для команд.
-Позволяет переименовывать существующие команды и разрешать конфликты имен между модулями.
+<manifest>
+version: 3.0.0
+source: https://github.com/AresUser1/KoteLoader/raw/main/modules/aliases.py
+author: Kote
+</manifest>
+
+Модуль для создания алиасов (псевдонимов) команд.
+Поддерживает кастомные эмодзи и глубокую интеграцию с ядром.
 """
 
 from telethon import events
@@ -14,14 +20,14 @@ from utils.message_builder import build_and_edit
 from utils.security import check_permission
 from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityCustomEmoji, MessageEntityItalic
 
-TAG_ID = 5843862283964390528      
-BOX_ID = 5256094480498436162      
-ARROW_ID = 5467906619964695429    
+TAG_ID = 5256094480498436162      
+BOX_ID = 5884479287171485878      
+ARROW_ID = 5877410604225924969    
 SUCCESS_ID = 5255813619702049821  
-ERROR_ID = 5985346521103604145    
+ERROR_ID = 5778527486270770928    
 TRASH_ID = 5255831443816327915    
 RELOAD_ID = 5877410604225924969   
-INFO_ID = 5256230583717079814     
+INFO_ID = 6028435952299413210     
 QUESTION_ID = 6030784887093464891 
 WRENCH_ID = 5258023599419171861   
 
@@ -116,7 +122,7 @@ async def resolve_alias_callback(event):
     if not check_permission(event, min_level="OWNER"):
         return await event.answer("🚫 Доступ запрещен")
 
-    data = event.pattern_match.group(1).decode()
+    data = event.data.decode().split(":", 1)[1]
     
     if data == "cancel":
         if user_id in PENDING_RESOLUTIONS:
@@ -146,24 +152,21 @@ async def _finalize_alias(event, new_alias, real_command, module_name):
     await loader.register_single_alias(event.client, new_alias, real_command, module_name)
     
     # 3. Отвечаем пользователю
-    success_msg = [
-        {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_ID}},
-        {"text": " Алиас ", "entity": MessageEntityBold},
-        {"text": new_alias, "entity": MessageEntityCode},
-        {"text": " успешно привязан к ", "entity": MessageEntityBold},
-        {"text": f"{real_command} ({module_name})", "entity": MessageEntityCode},
-        {"text": "!"}
-    ]
-
     if isinstance(event, events.CallbackQuery.Event):
-        # Используем parse_mode="html" для простоты в колбэках
         await event.edit(
             f"✅ <b>Алиас</b> <code>{new_alias}</code> <b>успешно привязан к</b> <code>{real_command} ({module_name})</code>!", 
             parse_mode="html",
             buttons=None
         )
     else:
-        await build_and_edit(event, success_msg)
+        await build_and_edit(event, [
+            {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_ID}},
+            {"text": " Алиас ", "entity": MessageEntityBold},
+            {"text": new_alias, "entity": MessageEntityCode},
+            {"text": " успешно привязан к ", "entity": MessageEntityBold},
+            {"text": f"{real_command} ({module_name})", "entity": MessageEntityCode},
+            {"text": "!"}
+        ])
 
 
 @register("unalias")
@@ -175,9 +178,12 @@ async def remove_alias_cmd(event):
     if not check_permission(event, min_level="OWNER"):
         return
 
-    alias_to_remove = event.pattern_match.group(1)
+    alias_to_remove = (event.pattern_match.group(1) or "").strip()
     if not alias_to_remove:
-        return await build_and_edit(event, [{"text": "❌ Укажите алиас для удаления."}])
+        return await build_and_edit(event, [
+            {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_ID}},
+            {"text": " Укажите алиас для удаления."}
+        ])
 
     # Проверяем, существует ли алиас, чтобы не делать лишних действий
     all_aliases = db.get_all_aliases()
