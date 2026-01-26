@@ -30,7 +30,6 @@ START_TIME = time.time()
 async def heartbeat():
     while True:
         await asyncio.sleep(60)
-        # print("💓 System Pulse: OK") 
 
 async def ensure_inline_mode_enabled(user_client, bot_username):
     try:
@@ -123,6 +122,33 @@ async def all_messages_handler(event):
         if (is_incoming and event.incoming) or (is_outgoing and event.outgoing):
             await watcher_func(event)
 
+async def ensure_folder_added(client):
+    """Проверяет и добавляет папку каналов KoteLoader, если её нет."""
+    try:
+        from telethon import functions
+        slug = "-PNK0knddLQ3MzAy"
+        
+        # Проверяем инвайт-ссылку папки
+        invite = await client(functions.chatlists.CheckChatlistInviteRequest(slug=slug))
+        
+        # Если папка уже добавлена и обновлений нет
+        if isinstance(invite, functions.chatlists.ChatlistInviteAlready):
+            return
+            
+        # Если это новый инвайт или есть новые пиры (каналы)
+        if hasattr(invite, 'peers'):
+            print(f"\n📂 Обнаружена папка с обновлениями модулей. Добавляю...")
+            await client(functions.chatlists.JoinChatlistInviteRequest(
+                slug=slug,
+                peers=invite.peers
+            ))
+            print("✅ Папка успешно добавлена в ваш список чатов!")
+            
+    except Exception as e:
+        # Если папка уже есть, Telegram может выкинуть ошибку, просто игнорируем
+        if "CHATLIST_ALREADY_JOINED" not in str(e):
+            pass
+
 async def start_clients():
     config = ConfigParser()
     config_file = "config.ini"
@@ -153,12 +179,35 @@ async def start_clients():
     
     await user_client.connect()
     if not await user_client.is_user_authorized():
+        session_file = f"{session_name}.session"
+        if os.path.exists(config_file) or os.path.exists("database.db"):
+            print(f"\n⚠️ Сессия '{session_name}' не авторизована (возможно, слетела).")
+            print("1. Попробовать войти заново (сохранить текущие данные и настройки)")
+            print("2. Перезаписать всё (удалить конфигурацию, базу данных и начать с нуля)")
+            
+            while True:
+                choice = input("Ваш выбор (1/2): ").strip()
+                if choice == "1":
+                    break
+                elif choice == "2":
+                    print("🗑 Удаление старых данных...")
+                    await user_client.disconnect()
+                    for file in [config_file, session_file, "database.db", "database.db-shm", "database.db-wal"]:
+                        if os.path.exists(file):
+                            try: os.remove(file)
+                            except: pass
+                    print("✅ Данные очищены. Пожалуйста, запустите бота снова для чистой настройки.")
+                    exit()
+                else:
+                    print("Введите 1 или 2.")
+        
         phone_number = input("Введите номер телефона (например +79001234567): ")
         await user_client.start(phone=phone_number)
     else:
         await user_client.start()
 
     print("✅ Успешный вход в аккаунт!")
+    await ensure_folder_added(user_client)
 
     bot_client = None
     
@@ -260,7 +309,7 @@ async def main():
     except Exception as e:
         print(f"⚠️ Ошибка при запуске твинков: {e}")
 
-    print("\n🟢 KoteLoader полностью запущен! Напишите .help в чате.")
+    print("\n🟢 KoteLoader полностью запущен! Напишите help в чате.")
     
     try:
         # Добавляем heartbeat в список задач
