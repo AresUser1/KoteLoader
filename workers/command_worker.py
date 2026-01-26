@@ -4,7 +4,7 @@ import asyncio
 import traceback
 import time
 from pathlib import Path
-from utils.loader import get_all_modules, load_module, unload_module, reload_module
+from utils import loader
 from services.state_manager import update_state_file
 from services.module_info_cache import cache_modules_info
 from utils import database as db
@@ -21,15 +21,18 @@ async def command_worker(user_client):
     cache_modules_info()
     
     # --- ЗАГРУЗКА МОДУЛЕЙ ---
-    all_modules = get_all_modules()
+    all_modules = loader.get_all_modules()
     print(f"Найдено модулей: {len(all_modules)}")
     
     for module in all_modules:
         try:
             # print(f"Загружаю {module}...") # Можно раскомментировать для отладки
-            await load_module(user_client, module)
+            await loader.load_module(user_client, module)
         except Exception:
             print(f"Ошибка загрузки модуля {module}:\n{traceback.format_exc()}")
+    
+    # --- РЕГИСТРАЦИЯ АЛИАСОВ ---
+    await loader.register_aliases(user_client)
             
     update_state_file(user_client)
     
@@ -85,17 +88,17 @@ async def command_worker(user_client):
                 if not all([command, module_name, chat_id]):
                     raise ValueError("Некорректные данные в command.json")
 
-                modules_to_process = get_all_modules() if module_name == "all" else [module_name]
+                modules_to_process = loader.get_all_modules() if module_name == "all" else [module_name]
                 
                 report_lines = []
                 for mod in modules_to_process:
                     try:
                         if command == "load":
-                            result_text = await load_module(user_client, mod)
+                            result_text = await loader.load_module(user_client, mod)
                         elif command == "unload":
-                            result_text = await unload_module(user_client, mod)
+                            result_text = await loader.unload_module(user_client, mod)
                         elif command == "reload":
-                            result_text = await reload_module(user_client, mod)
+                            result_text = await loader.reload_module(user_client, mod)
                         report_lines.append(result_text.get('message', str(result_text)))
                     except Exception as e:
                         report_lines.append(f"<b>Ошибка с модулем {mod}:</b> <code>{e}</code>")
