@@ -1,11 +1,5 @@
 # modules/aliases.py
 """
-<manifest>
-version: 1.2.1
-source: https://github.com/AresUser1/KoteLoader/raw/main/modules/aliases.py
-author: Kote
-</manifest>
-
 Модуль для создания псевдонимов (алиасов) для команд.
 Позволяет переименовывать существующие команды и разрешать конфликты имен между модулями.
 """
@@ -14,7 +8,8 @@ from telethon import events
 from telethon.tl.custom import Button
 from core import register, callback_handler
 from utils import database as db
-from utils.loader import COMMANDS_REGISTRY, reload_module
+from utils import loader
+from utils.loader import COMMANDS_REGISTRY
 from utils.message_builder import build_and_edit
 from utils.security import check_permission
 from telethon.tl.types import MessageEntityBold, MessageEntityCode, MessageEntityCustomEmoji, MessageEntityItalic
@@ -144,27 +139,13 @@ async def resolve_alias_callback(event):
 
 
 async def _finalize_alias(event, new_alias, real_command, module_name):
+    # 1. Сохраняем в БД
     db.add_alias(new_alias, real_command, module_name)
 
-    loader_msg = [
-        {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_ID}},
-        {"text": " Алиас сохранен.\n"},
-        {"text": "🔄", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": RELOAD_ID}},
-        {"text": " Перезагружаю модуль ", "entity": MessageEntityBold},
-        {"text": module_name, "entity": MessageEntityCode},
-        {"text": "..."}
-    ]
+    # 2. Динамически регистрируем новый обработчик
+    await loader.register_single_alias(event.client, new_alias, real_command, module_name)
     
-    try:
-        if isinstance(event, events.CallbackQuery.Event):
-            await event.edit("".join([p.get('text', '') for p in loader_msg]), buttons=None)
-        else:
-            await build_and_edit(event, loader_msg)
-    except: pass
-
-    client = event.client
-    await reload_module(client, module_name)
-    
+    # 3. Отвечаем пользователю
     success_msg = [
         {"text": "✅", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": SUCCESS_ID}},
         {"text": " Алиас ", "entity": MessageEntityBold},
@@ -175,9 +156,11 @@ async def _finalize_alias(event, new_alias, real_command, module_name):
     ]
 
     if isinstance(event, events.CallbackQuery.Event):
+        # Используем parse_mode="html" для простоты в колбэках
         await event.edit(
             f"✅ <b>Алиас</b> <code>{new_alias}</code> <b>успешно привязан к</b> <code>{real_command} ({module_name})</code>!", 
-            parse_mode="html"
+            parse_mode="html",
+            buttons=None
         )
     else:
         await build_and_edit(event, success_msg)
@@ -196,24 +179,21 @@ async def remove_alias_cmd(event):
     if not alias_to_remove:
         return await build_and_edit(event, [{"text": "❌ Укажите алиас для удаления."}])
 
+    # Проверяем, существует ли алиас, чтобы не делать лишних действий
     all_aliases = db.get_all_aliases()
-    target_module = None
-    found = False
-    
-    for row in all_aliases:
-        if row['alias'] == alias_to_remove:
-            target_module = row['module_name']
-            found = True
-            break
-    
-    if not found:
+    if not any(row['alias'] == alias_to_remove for row in all_aliases):
         return await build_and_edit(event, [
             {"text": "❌", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": ERROR_ID}},
             {"text": " Такой алиас не найден."}
         ])
 
+    # 1. Удаляем из БД
     db.remove_alias(alias_to_remove)
     
+    # 2. Динамически удаляем обработчик
+    await loader.unregister_single_alias(event.client, alias_to_remove)
+    
+    # 3. Отвечаем пользователю
     parts = [
         {"text": "🗑", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": TRASH_ID}},
         {"text": " Алиас ", "entity": MessageEntityBold},
@@ -221,14 +201,7 @@ async def remove_alias_cmd(event):
         {"text": " удален."}
     ]
     
-    if target_module:
-        parts.append({"text": "\n"})
-        parts.append({"text": "🔄", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": RELOAD_ID}})
-        parts.append({"text": " Перезагружаю модуль..."})
-        await build_and_edit(event, parts)
-        await reload_module(event.client, target_module)
-    else:
-        await build_and_edit(event, parts)
+    await build_and_edit(event, parts)
 
 
 @register("aliases")

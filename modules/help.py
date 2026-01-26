@@ -44,7 +44,19 @@ async def help_cmd(event):
         cmd_module = ""
         cmd_info_list = COMMANDS_REGISTRY.get(command_name)
         if cmd_info_list:
-            cmd_module = cmd_info_list[0].get("module")
+            cmd_module = cmd_info_list[0].get("module").lower()
+
+        # Проверка доступа для TRUSTED
+        user_id = event.sender_id
+        level = db.get_user_level(user_id)
+        if level == "TRUSTED" and cmd_module not in ["help", "about"]:
+            allowed = db.get_setting(f"allowed_mods_{user_id}")
+            if not allowed:
+                allowed = db.get_setting("allowed_mods_TRUSTED", default="wisp")
+            if allowed.lower() != "all":
+                allowed_list = [m.strip().lower() for m in allowed.split(",")]
+                if cmd_module not in allowed_list:
+                    cmd_info_list = None
 
         if not cmd_info_list or cmd_module in hidden_modules:
             return await build_and_edit(event, [
@@ -92,9 +104,28 @@ async def help_cmd(event):
         await build_and_edit(event, parts)
 
     async def show_all_commands():
+        user_id = event.sender_id
+        level = db.get_user_level(user_id)
+        
+        # Разрешенные модули для TRUSTED
+        allowed_list = []
+        if level == "TRUSTED":
+            allowed = db.get_setting(f"allowed_mods_{user_id}")
+            if not allowed:
+                allowed = db.get_setting("allowed_mods_TRUSTED", default="wisp")
+            if allowed.lower() != "all":
+                allowed_list = [m.strip().lower() for m in allowed.split(",")]
+                # Базовые модули всегда видны
+                allowed_list.extend(["help", "about"])
+
         visible_modules = defaultdict(list)
         for command, cmd_info_list in sorted(COMMANDS_REGISTRY.items()):
-            module_name = cmd_info_list[0]["module"]
+            module_name = cmd_info_list[0]["module"].lower()
+            
+            # Фильтрация для TRUSTED
+            if level == "TRUSTED" and allowed_list and module_name not in allowed_list:
+                continue
+
             if module_name not in hidden_modules:
                 visible_modules[module_name].append(command)
 

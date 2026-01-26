@@ -192,11 +192,96 @@ async def untrust_user(event):
         ])
 
     db.remove_user(user_id)
+    # Также удаляем персональные настройки модулей при удалении из TRUSTED
+    db.set_setting(f"allowed_mods_{user_id}", "")
+    
     await build_and_edit(event, [
         {"text": "🗑"},
         {"text": " Пользователь "},
         {"text": f"{user_id}", "entity": MessageEntityCode},
         {"text": " удален из доверенных."}
+    ])
+
+@register("settrust", incoming=True)
+async def set_trusted_permissions(event):
+    """Настроить доступ к модулям для TRUSTED.
+    
+    Usage: {prefix}settrust <id/all/ответ> <модули/all>
+    """
+    if not check_permission(event, min_level="OWNER"):
+        return
+
+    args = event.message.text.split(maxsplit=2)
+    if len(args) < 3:
+        # Проверяем, есть ли ответ на сообщение
+        reply = await event.get_reply_message()
+        if reply and len(args) == 2:
+            target = str(reply.sender_id)
+            modules = args[1]
+        else:
+            return await build_and_edit(event, [
+                {"text": "❌ "},
+                {"text": "Использование: ", "entity": MessageEntityBold},
+                {"text": ".settrust <id/all> <модули/all>", "entity": MessageEntityCode}
+            ])
+    else:
+        target = args[1]
+        modules = args[2]
+
+    if target.lower() == "all":
+        db.set_setting("allowed_mods_TRUSTED", modules)
+        target_name = "Все TRUSTED пользователи"
+    else:
+        try:
+            user_id = int(target)
+            db.set_setting(f"allowed_mods_{user_id}", modules)
+            target_name = f"Пользователь {user_id}"
+        except ValueError:
+            return await build_and_edit(event, [{"text": "❌ Неверный ID пользователя."}])
+
+    await build_and_edit(event, [
+        {"text": "✅"},
+        {"text": f" {target_name} "},
+        {"text": "теперь имеют доступ к: ", "entity": MessageEntityBold},
+        {"text": f"{modules}", "entity": MessageEntityCode}
+    ])
+
+@register("gettrust", incoming=True)
+async def get_trusted_permissions(event):
+    """Посмотреть права доступа TRUSTED.
+    
+    Usage: {prefix}gettrust <id/all/ответ>
+    """
+    if not check_permission(event, min_level="TRUSTED"):
+        return
+
+    args = event.message.text.split(maxsplit=1)
+    target = "all"
+    
+    if len(args) > 1:
+        target = args[1]
+    else:
+        reply = await event.get_reply_message()
+        if reply:
+            target = str(reply.sender_id)
+
+    if target.lower() == "all":
+        allowed = db.get_setting("allowed_mods_TRUSTED", default="wisp")
+        title = "Глобальные права TRUSTED"
+    else:
+        try:
+            user_id = int(target)
+            allowed = db.get_setting(f"allowed_mods_{user_id}")
+            if not allowed:
+                allowed = db.get_setting("allowed_mods_TRUSTED", default="wisp") + " (по умолчанию)"
+            title = f"Права пользователя {user_id}"
+        except ValueError:
+            return await build_and_edit(event, [{"text": "❌ Неверный ID пользователя."}])
+
+    await build_and_edit(event, [
+        {"text": "🔍 "},
+        {"text": f"{title}:\n", "entity": MessageEntityBold},
+        {"text": f"{allowed}", "entity": MessageEntityCode}
     ])
 
 @register("listtrust", incoming=True)

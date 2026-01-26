@@ -162,7 +162,7 @@ async def delmodemoji_cmd(event):
 async def modemojis_cmd(event):
     """Показывает текущие настройки эмодзи."""
     if not check_permission(event, min_level="TRUSTED"): return
-    parts = [{"text": "⚙️ "}, {"text": "Эмодзи для `modules.py`", "entity": MessageEntityBold}, {"text": "\n(Кастомные из БД перезаписывают дефолтные)\n\n"}]
+    parts = [{"text": "⚙️ "}, {"text": "Эмодзи для "}, {"text": "modules.py", "entity": MessageEntityCode}, {"text": "\n(Кастомные из БД перезаписывают дефолтные)\n\n"}]
     mapping = _get_static_emojis()
     custom_keys = db.get_module_data("modules", "modules_emojis", default={}).keys()
     for key, details in sorted(mapping.items()):
@@ -236,14 +236,14 @@ async def module_info(event):
     module_name = _find_module_by_name(module_name_input)
     
     if not module_name:
-         return await build_and_edit(event, [_build_emoji_part(emojis['ERROR']), {"text": f" Модуль `{module_name_input}` не найден.", "entity": MessageEntityBold}])
+         return await build_and_edit(event, [_build_emoji_part(emojis['ERROR']), {"text": " Модуль "}, {"text": module_name_input, "entity": MessageEntityCode}, {"text": " не найден.", "entity": MessageEntityBold}])
 
     module_path = None
     potential_paths = list(MODULES_DIR.rglob(f"{module_name.replace('.', '/')}.py"))
     if potential_paths: module_path = potential_paths[0]
     
     if not module_path or not module_path.exists():
-        return await build_and_edit(event, [_build_emoji_part(emojis['ERROR']), {"text": f" Модуль `{module_name}` не найден (ошибка пути).", "entity": MessageEntityBold}])
+        return await build_and_edit(event, [_build_emoji_part(emojis['ERROR']), {"text": " Модуль "}, {"text": module_name, "entity": MessageEntityCode}, {"text": " не найден (ошибка пути).", "entity": MessageEntityBold}])
     
     manifest = parse_manifest(module_path.read_text(encoding='utf-8'))
     
@@ -295,18 +295,28 @@ async def _handle_module_command(event, action: str):
     
     module_name = _find_module_by_name(module_name_input)
     if not module_name:
-        return await build_and_edit(event, [_build_emoji_part(emojis['ERROR']), {"text": " Ошибка: ", "entity": MessageEntityBold}, {"text": f"Модуль `{module_name_input}` не найден."}])
+        return await build_and_edit(event, [
+            _build_emoji_part(emojis['ERROR']), 
+            {"text": " Ошибка: ", "entity": MessageEntityBold}, 
+            {"text": "Модуль "},
+            {"text": module_name_input, "entity": MessageEntityCode},
+            {"text": " не найден."}
+        ])
 
     # ❗️❗️❗️ ЗАЩИТА ОТ ВЫГРУЗКИ СИСТЕМНЫХ МОДУЛЕЙ ❗️❗️❗️
     if action == "unload" and module_name in PROTECTED_MODULES:
          return await build_and_edit(event, [
              _build_emoji_part(emojis['LOCK']),
              {"text": " Ошибка: ", "entity": MessageEntityBold},
-             {"text": f"Модуль ", "entity": MessageEntityBold},
+             {"text": "Модуль ", "entity": MessageEntityBold},
              {"text": module_name, "entity": MessageEntityCode},
              {"text": " защищен от выгрузки.", "entity": MessageEntityBold}
          ])
     # -------------------------------------------------------
+
+    # Если модуль уже загружен и мы вызываем .load - делаем reload
+    if action == "load" and module_name in getattr(event.client, 'modules', {}):
+        action = "reload"
 
     action_map = {
         "load": {"verb": "Загружаю", "emoji": emojis['ROCKET'], "func": load_module},
