@@ -37,44 +37,81 @@ class Module:
 
 # --- Декораторы ---
 def register(command: str, **kwargs):
-    kwargs.setdefault("outgoing", True)
+    # Принудительно слушаем всё (и вход и выход), фильтрация теперь внутри wrapper
+    kwargs["incoming"] = True
+    kwargs["outgoing"] = True
+    
     def decorator(func):
-        async def wrapper(event, *args, **kwargs):
-            from utils import database as db
-            is_enabled = db.get_setting("userbot_enabled", default="True") == "True"
-            command_name = command
-            if not is_enabled:
-                if db.get_user_level(event.sender_id) == "OWNER" and command_name == "on": pass
-                else: return
+        async def wrapper(*args, **kwargs):
+            # 1. Ищем объект события
+            event = None
+            for arg in args:
+                if hasattr(arg, 'sender_id') and hasattr(arg, 'client'):
+                    event = arg
+                    break
             
-            # --- ПЕРЕХВАТ ОШИБОК ВЫПОЛНЕНИЯ ---
+            if not event:
+                return await func(*args, **kwargs)
+
+            from utils import database as db
+            
+            sender_id = event.sender_id
+            level = db.get_user_level(sender_id)
+            
+            # 2. ПРОВЕРКА ДОСТУПА
+            allowed_to_run = False
+            
+            # Владелец всегда может всё (проверяем по event.out или по БД)
+            if event.out or level == "OWNER":
+                allowed_to_run = True
+            
+            # TRUSTED - проверяем список модулей
+            elif level == "TRUSTED":
+                mod_path = func.__module__
+                module_name = mod_path.split('.')[-1].lower()
+                
+                if module_name in ["help", "about"]:
+                    allowed_to_run = True
+                else:
+                    allowed = db.get_setting(f"allowed_mods_{sender_id}")
+                    if not allowed:
+                        allowed = db.get_setting("allowed_mods_TRUSTED", default="wisp")
+                    
+                    if allowed.lower() == "all":
+                        allowed_to_run = True
+                    else:
+                        allowed_list = [m.strip().lower() for m in allowed.split(",")]
+                        if module_name in allowed_list:
+                            allowed_to_run = True
+                        else:
+                            print(f"🛑 [Access Denied] User {sender_id} -> .{command} (mod: {module_name})")
+            
+            if not allowed_to_run:
+                return
+
+            # 3. ПРОВЕРКА ВКЛЮЧЕННОСТИ
+            is_enabled = db.get_setting("userbot_enabled", default="True") == "True"
+            if not is_enabled and not (level == "OWNER" and command == "on"):
+                return
+            
+            # --- ВЫПОЛНЕНИЕ ---
+            print(f"🟢 [Running] .{command} for {sender_id} (Level: {level})")
             try:
-                await func(event, *args, **kwargs)
+                return await func(*args, **kwargs)
             except Exception:
-                # Если произошла ошибка во время выполнения команды
                 from utils.message_builder import build_and_edit
-                
                 exc = traceback.format_exc()
-                
-                parts = [
-                    {"text": "🚫 Call "},
-                    {"text": f".{command}", "entity": MessageEntityCode},
-                    {"text": " failed!\n\n", "entity": MessageEntityBold},
-                    {"text": "🧾 Logs:\n", "entity": MessageEntityBold},
-                    # Попытка создать свернутую цитату.
-                    # message_builder должен уметь обрабатывать kwargs или игнорировать их при ошибке.
-                    {
-                        "text": exc, 
-                        "entity": MessageEntityBlockquote, 
-                        "kwargs": {"collapsed": True}
-                    }
-                ]
-                
+                print(f"❌ Error in .{command}:\n{exc}")
                 try:
+                    parts = [
+                        {"text": "🚫 Call "},
+                        {"text": f".{command}", "entity": MessageEntityCode},
+                        {"text": " failed!\n\n", "entity": MessageEntityBold},
+                        {"text": "🧾 Logs:\n", "entity": MessageEntityBold},
+                        {"text": exc, "entity": MessageEntityBlockquote, "kwargs": {"collapsed": True}}
+                    ]
                     await build_and_edit(event, parts)
-                except Exception as e:
-                    print(f"CRITICAL ERROR in .{command} handler:\n{exc}")
-                    print(f"Failed to send error message: {e}")
+                except: pass
             # ----------------------------------
         
         wrapper._is_command = True
@@ -180,7 +217,8 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
         client.modules[module_name] = {
             "module": imported_module,
             "instance": module_instance,
-            "handlers": registered_handlers
+            "handlers": registered_handlers,
+            "alias_handlers": [] 
         }
         
         return {"status": "ok", "message": f"Модуль {module_name} успешно загружен."}
@@ -203,10 +241,18 @@ async def unload_module(client, module_name: str) -> dict:
 
         for func, handler in module_data["handlers"]:
             client.remove_event_handler(func, handler)
+        
+        for func, handler in module_data.get("alias_handlers", []):
+            client.remove_event_handler(func, handler)
 
         for command in list(COMMANDS_REGISTRY):
             COMMANDS_REGISTRY[command] = [cmd for cmd in COMMANDS_REGISTRY[command] if cmd["module"] != module_name]
             if not COMMANDS_REGISTRY[command]: del COMMANDS_REGISTRY[command]
+        
+        # Также чистим алиасы из реестра
+        aliases_to_remove = [alias for alias, details in COMMANDS_REGISTRY.items() if details and details[0].get("is_alias") and details[0].get("module") == module_name]
+        for alias in aliases_to_remove:
+            del COMMANDS_REGISTRY[alias]
 
         for pattern in list(CALLBACK_REGISTRY):
             if CALLBACK_REGISTRY[pattern].__module__ == f"modules.{module_name}":
@@ -235,7 +281,12 @@ async def reload_module(client, module_name: str, chat_id: int = None) -> dict:
     if unload_result["status"] == "error":
         return unload_result
     
-    return await load_module(client, module_name, chat_id)
+    load_result = await load_module(client, module_name, chat_id)
+    if load_result["status"] == 'ok':
+        # После перезагрузки одного модуля, нужно перерегистрировать все алиасы,
+        # так как могли измениться ссылки на функции
+        await register_aliases(client)
+    return load_result
 
 def get_all_modules() -> list[str]:
     all_modules = []
@@ -246,3 +297,97 @@ def get_all_modules() -> list[str]:
         import_path = ".".join(relative_path.with_suffix("").parts)
         all_modules.append(import_path)
     return all_modules
+
+
+# --- ALIAS LOGIC ---
+
+async def register_single_alias(client, alias: str, real_command: str, module_name: str):
+    """Находит и регистрирует один конкретный алиас."""
+    if module_name not in client.modules:
+        return
+        
+    original_func = None
+    handler_args = None
+
+    # Ищем оригинальную функцию и ее аргументы
+    for func, handler in client.modules[module_name]["handlers"]:
+        if getattr(func, "_is_command", False) and func._command_name == real_command:
+            original_func = func
+            handler_args = func._command_kwargs.copy()
+            break
+            
+    if not original_func or not handler_args:
+        return
+
+    # Создаем новый обработчик для алиаса
+    pattern_text = re.escape(PREFIX) + alias + r"(?:\s+(.*))?$"
+    handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
+    
+    # Убеждаемся, что wrapper-функция будет уникальной, чтобы telethon не ругался
+    async def alias_wrapper(event):
+        await original_func(event)
+
+    alias_handler = events.NewMessage(**handler_args)
+    client.add_event_handler(alias_wrapper, alias_handler)
+    
+    # Сохраняем ссылку на обработчик, чтобы его можно было удалить
+    client.modules[module_name]["alias_handlers"].append((alias_wrapper, alias_handler))
+    
+    # Добавляем алиас в реестр для .help и других систем
+    if alias not in COMMANDS_REGISTRY: COMMANDS_REGISTRY[alias] = []
+    COMMANDS_REGISTRY[alias].append({
+        "module": module_name, 
+        "doc": f"<i>Псевдоним для</i> <code>{real_command}</code>",
+        "is_alias": True
+    })
+
+async def unregister_single_alias(client, alias_to_remove: str):
+    """Находит и удаляет обработчик для одного алиаса."""
+    found_and_removed = False
+    for mod_name, mod_data in client.modules.items():
+        handlers_to_keep = []
+        for func, handler in mod_data.get("alias_handlers", []):
+            # Паттерн хранится в handler.pattern
+            pattern = handler.pattern.pattern
+            # Собираем ожидаемый паттерн для алиаса
+            expected_pattern = re.escape(PREFIX) + alias_to_remove + r"(?:\s+(.*))?$"
+            if pattern == expected_pattern:
+                client.remove_event_handler(func, handler)
+                found_and_removed = True
+            else:
+                handlers_to_keep.append((func, handler))
+        
+        if found_and_removed:
+            mod_data["alias_handlers"] = handlers_to_keep
+            break # Алиас уникален, можно выходить
+
+    # Удаляем из реестра команд
+    if alias_to_remove in COMMANDS_REGISTRY:
+        COMMANDS_REGISTRY[alias_to_remove] = [
+            cmd for cmd in COMMANDS_REGISTRY[alias_to_remove] if not cmd.get("is_alias")
+        ]
+        if not COMMANDS_REGISTRY[alias_to_remove]:
+            del COMMANDS_REGISTRY[alias_to_remove]
+
+
+async def register_aliases(client):
+    """Загружает все алиасы из БД и регистрирует для них обработчики."""
+    from utils import database as db
+    
+    # Сначала очистим все старые обработчики алиасов
+    for module_data in client.modules.values():
+        for func, handler in module_data.get("alias_handlers", []):
+            client.remove_event_handler(func, handler)
+        module_data["alias_handlers"] = []
+
+    # И почистим реестр
+    for command in list(COMMANDS_REGISTRY):
+        COMMANDS_REGISTRY[command] = [cmd for cmd in COMMANDS_REGISTRY[command] if not cmd.get("is_alias")]
+        if not COMMANDS_REGISTRY[command]: del COMMANDS_REGISTRY[command]
+
+    aliases = db.get_all_aliases()
+    if not aliases: return
+
+    print(f"🔹 Регистрирую {len(aliases)} псевдонимов...")
+    for item in aliases:
+        await register_single_alias(client, item['alias'], item['real_command'], item['module_name'])
