@@ -1,6 +1,7 @@
 # services/twin_manager.py
 import asyncio
 import json
+import random
 from pathlib import Path
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -8,6 +9,33 @@ from configparser import ConfigParser
 
 TWINS_FILE = Path(__file__).parent.parent / "twins.json"
 CONFIG_FILE = Path(__file__).parent.parent / "config.ini"
+
+def generate_device_info():
+    """Generates random device info to avoid detection/auth issues."""
+    os_choices = [
+        ("Windows", "10"),
+        ("Windows", "11"),
+        ("Android", "13"),
+        ("Android", "14"),
+        ("macOS", "14"),
+        ("iOS", "17")
+    ]
+    os_name, os_version = random.choice(os_choices)
+    
+    device_models = [
+        "Samsung Galaxy S23",
+        "Pixel 7",
+        "iPhone 14",
+        "Xiaomi 13",
+        "Desktop PC",
+        "MacBook Pro"
+    ]
+    
+    system_version = f"{os_name} {os_version}"
+    device_model = random.choice(device_models)
+    app_version = "1.0.0 KoteLoader Twin"
+    
+    return system_version, device_model, app_version
 
 class TwinManager:
     def __init__(self):
@@ -106,7 +134,17 @@ class TwinManager:
                 raise ValueError("API ID/Hash не найдены ни в твинке, ни в config.ini")
 
         try:
-            client = TelegramClient(StringSession(session_str), t_api_id, t_api_hash)
+            system_version, device_model, app_version = generate_device_info()
+            client = TelegramClient(
+                StringSession(session_str), 
+                t_api_id, 
+                t_api_hash,
+                system_version=system_version,
+                device_model=device_model,
+                app_version=app_version,
+                lang_code="en",
+                system_lang_code="en-US"
+            )
             await client.connect()
             
             if not await client.is_user_authorized():
