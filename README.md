@@ -12,17 +12,22 @@
 * **В 2.0.0 добавлена поддержка твинов:** теперь ими можно управлять если скрипты это поддерживают.
 ## 📦 Установка
 
-1.  Клонируйте репозиторий:
-    ```bash
-    git clone https://github.com/AresUser1/KoteLoader.git
-    cd KoteLoader
-    ```
-2.  Установите зависимости:
-    ```bash
-    pip install -r requirements.txt
-    ```
-3.  Запустите лоадер:
-    ```bash
-    python3 main.py
-    ```
+1.  Установка в термукс
+   ```
+pkg update && pkg upgrade -y && \
+pkg install git python -y && \
+git clone https://github.com/AresUser1/KoteLoader.git && \
+cd KoteLoader && \
+pip install -r requirements.txt && \
+python main.py
+   ```
+2.  Установка в vps/vds
+   ```
+apt update && apt install git python3 -y && \
+git clone https://github.com/AresUser1/KoteLoader.git && \
+cd KoteLoader && \
+pip install -r requirements.txt && \
+python3 main.py
+```
+
 4.  При первом запуске бот автоматически проведет вас через настройку (ввод `api_id`, `api_hash` и создание бота-помощника).
