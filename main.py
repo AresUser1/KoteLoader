@@ -5,6 +5,7 @@ import re
 import time
 import os
 import uuid
+import random
 from configparser import ConfigParser
 from telethon import TelegramClient, events
 from telethon.errors import AccessTokenInvalidError, AccessTokenExpiredError
@@ -30,6 +31,33 @@ START_TIME = time.time()
 async def heartbeat():
     while True:
         await asyncio.sleep(60)
+
+def generate_device_info():
+    """Generates random device info to avoid detection/auth issues."""
+    os_choices = [
+        ("Windows", "10"),
+        ("Windows", "11"),
+        ("Android", "13"),
+        ("Android", "14"),
+        ("macOS", "14"),
+        ("iOS", "17")
+    ]
+    os_name, os_version = random.choice(os_choices)
+    
+    device_models = [
+        "Samsung Galaxy S23",
+        "Pixel 7",
+        "iPhone 14",
+        "Xiaomi 13",
+        "Desktop PC",
+        "MacBook Pro"
+    ]
+    
+    system_version = f"{os_name} {os_version}"
+    device_model = random.choice(device_models)
+    app_version = "1.0.0 KoteLoader"
+    
+    return system_version, device_model, app_version
 
 async def ensure_inline_mode_enabled(user_client, bot_username):
     try:
@@ -126,27 +154,49 @@ async def ensure_folder_added(client):
     """Проверяет и добавляет папку каналов KoteLoader, если её нет."""
     try:
         from telethon import functions
-        slug = "-PNK0knddLQ3MzAy"
+        from telethon.tl.types.chatlists import ChatlistInviteAlready
+        
+        slug = "eNIT7MB1ledlNTVi"
         
         # Проверяем инвайт-ссылку папки
         invite = await client(functions.chatlists.CheckChatlistInviteRequest(slug=slug))
         
         # Если папка уже добавлена и обновлений нет
-        if isinstance(invite, functions.chatlists.ChatlistInviteAlready):
+        if isinstance(invite, ChatlistInviteAlready):
             return
             
         # Если это новый инвайт или есть новые пиры (каналы)
         if hasattr(invite, 'peers'):
             print(f"\n📂 Обнаружена папка с обновлениями модулей. Добавляю...")
-            await client(functions.chatlists.JoinChatlistInviteRequest(
-                slug=slug,
-                peers=invite.peers
-            ))
-            print("✅ Папка успешно добавлена в ваш список чатов!")
+            
+            from telethon import utils
+            
+            # Собираем все сущности (чаты/юзеры) из инвайта, чтобы достать access_hash
+            all_entities = {e.id: e for e in getattr(invite, 'chats', []) + getattr(invite, 'users', [])}
+            
+            input_peers = []
+            for peer in invite.peers:
+                # Извлекаем "чистый" ID (без -100 префикса), так как ключи в all_entities - это чистые ID
+                bare_id = getattr(peer, 'user_id', None) or \
+                          getattr(peer, 'channel_id', None) or \
+                          getattr(peer, 'chat_id', None)
+                          
+                if bare_id and bare_id in all_entities:
+                    input_peers.append(utils.get_input_peer(all_entities[bare_id]))
+            
+            if input_peers:
+                await client(functions.chatlists.JoinChatlistInviteRequest(
+                    slug=slug,
+                    peers=input_peers
+                ))
+                print("✅ Папка успешно добавлена в ваш список чатов!")
+            else:
+                print(f"⚠️ Не удалось найти доступные чаты в папке. (Peers: {len(invite.peers)}, Entities: {len(all_entities)})")
             
     except Exception as e:
         # Если папка уже есть, Telegram может выкинуть ошибку, просто игнорируем
         if "CHATLIST_ALREADY_JOINED" not in str(e):
+            print(f"⚠️ Ошибка при добавлении папки: {e}")
             pass
 
 async def start_clients():
@@ -175,7 +225,18 @@ async def start_clients():
         session_name = config.get("telethon", "session_name")
 
     print(f"\n🚀 Подключение к аккаунту ({session_name})...")
-    user_client = TelegramClient(session_name, api_id, api_hash)
+    
+    system_version, device_model, app_version = generate_device_info()
+    user_client = TelegramClient(
+        session_name, 
+        api_id, 
+        api_hash,
+        system_version=system_version,
+        device_model=device_model,
+        app_version=app_version,
+        lang_code="en",
+        system_lang_code="en-US"
+    )
     
     await user_client.connect()
     if not await user_client.is_user_authorized():
