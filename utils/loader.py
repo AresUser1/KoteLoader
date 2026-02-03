@@ -304,84 +304,53 @@ async def reload_module(client, module_name: str, chat_id: int = None) -> dict:
     
     return await load_module(client, module_name, chat_id)
 
+async def register_single_alias(client, alias: str, real_command: str, module_name: str):
+    """Регистрирует один алиас. Используется в modules/aliases.py"""
+    if module_name not in client.modules: return False
+    
+    module_data = client.modules[module_name]
+    target_func = None
+    
+    for func, handler in module_data["handlers"]:
+        if getattr(func, "_command_name", None) == real_command:
+            target_func = func
+            handler_args = getattr(func, "_command_kwargs", {}).copy()
+            break
+    
+    if target_func:
+        pattern_text = re.escape(PREFIX) + re.escape(alias) + r"(?:\s+(.*))?$"
+        handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
+        
+        new_handler = events.NewMessage(**handler_args)
+        client.add_event_handler(target_func, new_handler)
+        
+        # Добавляем в список хендлеров модуля
+        client.modules[module_name]["handlers"].append((target_func, new_handler))
+        
+        # Добавляем в реестр команд для .help
+        if alias not in COMMANDS_REGISTRY: COMMANDS_REGISTRY[alias] = []
+        original_doc = "Нет описания"
+        if real_command in COMMANDS_REGISTRY:
+            original_doc = COMMANDS_REGISTRY[real_command][0].get("doc", "Нет описания")
+        
+        COMMANDS_REGISTRY[alias].append({
+            "module": module_name,
+            "doc": f"🔗 Алиас для .{real_command}\n\n{original_doc}"
+        })
+        return True
+    return False
+
 async def register_aliases(client):
     """
-    Регистрирует алиасы (псевдонимы команд) из базы данных.
-    Вызывается при старте бота и при создании нового алиаса.
+    Регистрирует ВСЕ алиасы из базы данных.
     """
     from utils import database as db
-    
     aliases = db.get_all_aliases()
-    
-    # 1. Сначала очищаем старые хендлеры алиасов (если есть), 
-    # чтобы избежать дублирования при перезагрузке
-    # (Это сложно сделать выборочно, поэтому мы полагаемся на то, 
-    # что при вызове register_aliases мы просто добавляем новые, 
-    # а старые уже удалены, если это был reload)
-    
-    registered_count = 0
-    
+    count = 0
     for row in aliases:
-        alias = row['alias']
-        real_command = row['real_command']
-        module_name = row['module_name']
-        
-        # Находим оригинальную функцию команды
-        # COMMANDS_REGISTRY хранит список: [{'module': 'admin', 'doc': '...'}, ...]
-        # Но нам нужен САМ ОБЪЕКТ ФУНКЦИИ, чтобы повесить на него новый хендлер.
-        # COMMANDS_REGISTRY не хранит ссылки на функции, только инфо.
-        
-        # Поэтому нам придется искать функцию в загруженных модулях клиента.
-        if module_name not in client.modules:
-            continue
-            
-        module_data = client.modules[module_name]
-        target_func = None
-        
-        # Ищем функцию, у которой _command_name == real_command
-        # module_data["handlers"] это список кортежей (func, handler_instance)
-        # Но func там - это обертка декоратора. У обертки есть атрибут _command_name
-        
-        for func, handler in module_data["handlers"]:
-            if getattr(func, "_command_name", None) == real_command:
-                target_func = func
-                # Берем аргументы из декоратора (outgoing=True и т.д.)
-                handler_args = getattr(func, "_command_kwargs", {}).copy()
-                break
-        
-        if target_func:
-            # Создаем новый паттерн для алиаса
-            pattern_text = re.escape(PREFIX) + re.escape(alias) + r"(?:\s+(.*))?$"
-            handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
-            
-            # Создаем и регистрируем новый хендлер
-            new_handler = events.NewMessage(**handler_args)
-            client.add_event_handler(target_func, new_handler)
-            
-            # Важно: добавляем этот хендлер в список хендлеров модуля, 
-            # чтобы при unload_module(aliases) они тоже удалились?
-            # Нет, алиасы привязаны к целевому модулю (module_name).
-            # Поэтому добавляем их в список хендлеров ЦЕЛЕВОГО модуля.
-            client.modules[module_name]["handlers"].append((target_func, new_handler))
-            
-            # --- FIX: Добавляем алиас в реестр команд, чтобы он был виден в .help ---
-            if alias not in COMMANDS_REGISTRY:
-                COMMANDS_REGISTRY[alias] = []
-            
-            # Ищем описание оригинальной команды
-            original_doc = "Нет описания"
-            if real_command in COMMANDS_REGISTRY:
-                original_doc = COMMANDS_REGISTRY[real_command][0].get("doc", "Нет описания")
-
-            COMMANDS_REGISTRY[alias].append({
-                "module": module_name,
-                "doc": f"🔗 Алиас для .{real_command}\n\n{original_doc}"
-            })
-            # -----------------------------------------------------------------------
-            
-            registered_count += 1
-
-    return registered_count
+        if await register_single_alias(client, row['alias'], row['real_command'], row['module_name']):
+            count += 1
+    return count
 
 def get_all_modules() -> list[str]:
     all_modules = []
