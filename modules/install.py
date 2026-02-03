@@ -1,20 +1,24 @@
 # modules/install.py
 """
 <manifest>
-version: 2.0.2
+version: 2.1.0
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/install.py
 author: Kote
 </manifest>
 
 Управление модулями: установка, удаление, скачивание.
-Включает защиту от даунгрейда системных модулей и проверку версии ядра.
+Включает защиту от даунгрейда системных модулей, проверку версии ядра
+и АВТОМАТИЧЕСКУЮ установку зависимостей.
 """
 
 import os
+import sys
+import ast
 import aiohttp
 import traceback
 import asyncio
 import shutil
+import importlib.util
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Optional
@@ -39,8 +43,54 @@ SECURITY_INFO_ID = 5879785854284599288
 SECURITY_BLOCK_ID = 5778527486270770928
 SECURITY_WARN_ID = 5881702736843511327
 LOCK_EMOJI_ID = 5778570255555105942
+PIP_EMOJI_ID = 5364265190353286344 # Использую CHART для pip
 
 MODULES_DIR = Path(__file__).parent.parent / "modules"
+
+# --- Словарь зависимостей (Import -> Pip Package) ---
+PIP_MAPPING = {
+    "cv2": "opencv-python",
+    "PIL": "Pillow",
+    "telethon": "telethon",
+    "requests": "requests",
+    "bs4": "beautifulsoup4",
+    "google.generativeai": "google-generativeai",
+    "google.ai.generativelanguage": "google-generativeai",
+    "youtube_dl": "youtube_dl",
+    "yt_dlp": "yt-dlp",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "matplotlib": "matplotlib",
+    "sklearn": "scikit-learn",
+    "yaml": "PyYAML",
+    "dateutil": "python-dateutil",
+    "pytz": "pytz",
+    "aiohttp": "aiohttp",
+    "colorama": "colorama",
+    "emoji": "emoji",
+    "qrcode": "qrcode",
+    "gtts": "gTTS",
+    "mutagen": "mutagen",
+    "pydub": "pydub",
+    "shazamio": "shazamio",
+    "fuzzywuzzy": "fuzzywuzzy",
+    "Levenshtein": "python-Levenshtein",
+    "speedtest": "speedtest-cli",
+    "translators": "translators",
+    "deep_translator": "deep-translator",
+    "git": "GitPython",
+    "psutil": "psutil"
+}
+
+# Приблизительный список стандартных библиотек, чтобы не пытаться их ставить
+STD_LIB = {
+    "os", "sys", "math", "time", "datetime", "json", "re", "random", "asyncio", 
+    "collections", "itertools", "functools", "typing", "pathlib", "shutil", 
+    "logging", "traceback", "inspect", "importlib", "subprocess", "base64", 
+    "hashlib", "io", "copy", "platform", "socket", "ssl", "urllib", "uuid",
+    "ast", "pickle", "sqlite3", "html", "http", "email", "calendar", "zipfile",
+    "gzip", "tarfile", "csv", "xml", "unittest", "tempfile", "weakref", "abc"
+}
 
 def _find_module_path(user_input: str) -> Path | None:
     if not user_input: return None
@@ -77,6 +127,67 @@ def compare_versions(ver1, ver2):
         return v1 > v2
     except ValueError:
         return False
+
+async def install_requirements(event, code_content: str):
+    """Автоматически находит и устанавливает зависимости."""
+    try:
+        tree = ast.parse(code_content)
+    except Exception:
+        return # Если код не парсится, то и импорты не найдем
+
+    needed_packages = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root_pkg = alias.name.split('.')[0]
+                if root_pkg not in STD_LIB:
+                    needed_packages.add(root_pkg)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                root_pkg = node.module.split('.')[0]
+                if root_pkg not in STD_LIB:
+                    needed_packages.add(root_pkg)
+
+    packages_to_install = []
+    
+    for pkg in needed_packages:
+        # 1. Проверяем, установлен ли модуль
+        if importlib.util.find_spec(pkg) is not None:
+            continue
+        
+        # 2. Ищем имя пакета в маппинге
+        # Если нет в маппинге, пробуем установить по имени импорта (часто совпадает)
+        install_name = PIP_MAPPING.get(pkg, pkg)
+        packages_to_install.append(install_name)
+
+    if not packages_to_install:
+        return
+
+    # Удаляем дубликаты
+    packages_to_install = list(set(packages_to_install))
+    
+    pkg_str = ", ".join([f"`{p}`" for p in packages_to_install])
+    await build_and_edit(event, [
+        {"text": "📦", "entity": MessageEntityCustomEmoji, "kwargs": {"document_id": PIP_EMOJI_ID}},
+        {"text": " Устанавливаю зависимости: ", "entity": MessageEntityBold},
+        {"text": f"{pkg_str}..."}
+    ])
+
+    for pkg in packages_to_install:
+        try:
+            process = await asyncio.create_subprocess_shell(
+                f"{sys.executable} -m pip install {pkg}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                print(f"Failed to install {pkg}: {stderr.decode()}")
+                # Не прерываемся, пробуем остальные
+        except Exception as e:
+            print(f"Error installing {pkg}: {e}")
 
 async def _install_from_py_url(event, url, force=False):
     try:
@@ -121,7 +232,7 @@ async def _install_from_git_repo(event, url, force=False):
     
     req_path = target_dir / "requirements.txt"
     if req_path.exists():
-        await build_and_edit(event, "`requirements.txt`** найден, устанавливаю зависимости...**", parse_mode="md")
+        await build_and_edit(event, "`requirements.txt`** найден, устанавливаю зависимости...", parse_mode="md")
         pip_process = await asyncio.create_subprocess_shell(
             f"pip install -r {req_path}",
             stdout=asyncio.subprocess.PIPE,
@@ -224,7 +335,8 @@ async def process_and_install(event, file_name, content, source_url=None, force=
         scan_result = scan_code(content)
         level = scan_result["level"]
 
-        if level != "safe":
+        # Игнорируем уровень INFO
+        if level != "safe" and level != "info":
             emoji_map = {
                 "block": {"emoji": "❌", "id": SECURITY_BLOCK_ID, "title": "Установка отменена. Обнаружены критические угрозы:"},
                 "warning": {"emoji": "⚠️", "id": SECURITY_WARN_ID, "title": "Обнаружены потенциальные угрозы:"},
@@ -255,6 +367,10 @@ async def process_and_install(event, file_name, content, source_url=None, force=
             else:
                  parts.append({"text": "\nЭтот модуль не будет установлен."})
             return await build_and_edit(event, parts)
+    
+    # --- SMART DEPENDENCY INSTALLER ---
+    await install_requirements(event, content)
+    # ----------------------------------
 
     with open(module_path, 'w', encoding='utf-8') as f:
         f.write(content)
