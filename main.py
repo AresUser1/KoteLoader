@@ -7,7 +7,7 @@ import os
 import uuid
 import random
 from configparser import ConfigParser
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, errors
 from telethon.errors import AccessTokenInvalidError, AccessTokenExpiredError
 
 LOG_FILE = "kote_loader.log"
@@ -33,31 +33,17 @@ async def heartbeat():
         await asyncio.sleep(60)
 
 def generate_device_info():
-    """Generates random device info to avoid detection/auth issues."""
-    os_choices = [
-        ("Windows", "10"),
-        ("Windows", "11"),
-        ("Android", "13"),
-        ("Android", "14"),
-        ("macOS", "14"),
-        ("iOS", "17")
+    """Generates realistic device info based on official Telegram client patterns."""
+    devices = [
+        ("Android 13", "Samsung Galaxy S23 Ultra", "10.3.2"),
+        ("Android 14", "Google Pixel 8 Pro", "10.5.0"),
+        ("iOS 17.2", "iPhone 15 Pro Max", "10.4.1"),
+        ("Windows 11", "Desktop PC", "4.11.8 x64"),
+        ("macOS 14.1", "MacBook Air M2", "10.3.1"),
+        ("Android 12", "Xiaomi 13 Pro", "10.0.1")
     ]
-    os_name, os_version = random.choice(os_choices)
-    
-    device_models = [
-        "Samsung Galaxy S23",
-        "Pixel 7",
-        "iPhone 14",
-        "Xiaomi 13",
-        "Desktop PC",
-        "MacBook Pro"
-    ]
-    
-    system_version = f"{os_name} {os_version}"
-    device_model = random.choice(device_models)
-    app_version = "1.0.0 KoteLoader"
-    
-    return system_version, device_model, app_version
+    sys_ver, model, app_ver = random.choice(devices)
+    return sys_ver, model, f"{app_ver} KoteLoader"
 
 async def ensure_inline_mode_enabled(user_client, bot_username):
     try:
@@ -224,9 +210,28 @@ async def start_clients():
         api_hash = config.get("telethon", "api_hash")
         session_name = config.get("telethon", "session_name")
 
-    print(f"\n🚀 Подключение к аккаунту ({session_name})...")
+    # --- ❗️ FIX: Загружаем или генерируем (и сохраняем) данные устройства ---
+    # Если менять устройство при каждом запуске, Telegram даст бан (FloodWait).
     
-    system_version, device_model, app_version = generate_device_info()
+    if not config.has_option("telethon", "system_version"):
+        print("🛠 Генерация и сохранение постоянных данных устройства...")
+        gen_sys, gen_model, gen_app = generate_device_info()
+        
+        config.set("telethon", "system_version", gen_sys)
+        config.set("telethon", "device_model", gen_model)
+        config.set("telethon", "app_version", gen_app)
+        
+        with open(config_file, 'w', encoding='utf-8') as f:
+            config.write(f)
+            
+    system_version = config.get("telethon", "system_version")
+    device_model = config.get("telethon", "device_model")
+    app_version = config.get("telethon", "app_version")
+    # -----------------------------------------------------------------------
+
+    print(f"\n🚀 Подключение к аккаунту ({session_name})...")
+    print(f"📱 Устройство: {device_model} ({system_version})") # Для инфо
+    
     user_client = TelegramClient(
         session_name, 
         api_id, 
@@ -262,8 +267,27 @@ async def start_clients():
                 else:
                     print("Введите 1 или 2.")
         
-        phone_number = input("Введите номер телефона (например +79001234567): ")
-        await user_client.start(phone=phone_number)
+        # --- РУЧНОЙ ВХОД (Manual Flow) ---
+        phone_number = input("\n📱 Введите номер телефона (например +79001234567): ")
+        try:
+            sent_code = await user_client.send_code_request(phone_number)
+            print(f"✅ Код успешно отправлен в Telegram на номер {phone_number}")
+            
+            code = input("💬 Введите код подтверждения из Telegram: ")
+            try:
+                await user_client.sign_in(phone_number, code, password=None)
+            except errors.SessionPasswordNeededError:
+                # Ввод пароля (сделан видимым по запросу)
+                password = input("🔐 Аккаунт защищен облачным паролем.\nВведите пароль (будет виден): ")
+                await user_client.sign_in(password=password)
+                
+        except errors.PhonePasswordFloodError:
+            print("\n❌ \033[91mTelegram временно заблокировал вход для этого номера из-за частых попыток.\033[0m")
+            print("⏳ Пожалуйста, подождите от 30 минут до 24 часов перед следующей попыткой.")
+            exit()
+        except Exception as e:
+            print(f"\n❌ Ошибка при входе: {e}")
+            exit()
     else:
         await user_client.start()
 
