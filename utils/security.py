@@ -150,37 +150,50 @@ def check_permission(event, min_level: str = "TRUSTED") -> bool:
     
     return True
 
-# --- Runtime Protection ---
+from telethon import TelegramClient
+import typing
+
+class CustomTelegramClient(TelegramClient):
+    """Кастомный клиент с кэшированием сущностей и защитой, как в Heroku."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Кэш для пользователей и чатов, чтобы не спамить запросами к серверу
+        self._entity_cache = {}
+
+    async def get_entity(self, entity):
+        # Если сущность уже в кэше — отдаем сразу
+        if isinstance(entity, (int, str)) and entity in self._entity_cache:
+            return self._entity_cache[entity]
+        
+        try:
+            res = await super().get_entity(entity)
+            if res:
+                # Сохраняем по ID и по Username (если есть)
+                self._entity_cache[res.id] = res
+                if hasattr(res, 'username') and res.username:
+                    self._entity_cache[res.username] = res
+            return res
+        except Exception as e:
+            raise e
+
+    async def __call__(self, request, *args, **kwargs):
+        # Блокировка опасных запросов (Runtime Protection)
+        blocked_requests = (
+            DeleteAccountRequest, 
+            ResetAuthorizationsRequest,
+            "GetAuthorizationsRequest",
+            "UpdatePasswordSettingsRequest"
+        )
+        
+        req_name = request.__class__.__name__
+        if isinstance(request, blocked_requests) or req_name in blocked_requests:
+            raise SecurityError(f"🚫 Безопасность: Запрос {req_name} заблокирован!")
+        
+        return await super().__call__(request, *args, **kwargs)
+
 class SecurityError(Exception):
     pass
 
-class SafeClient:
-    """Wrapper for TelegramClient to block dangerous requests."""
-    def __init__(self, client):
-        object.__setattr__(self, "_client", client)
-
-    def __getattr__(self, name):
-        return getattr(self._client, name)
-
-    def __setattr__(self, name, value):
-        if name == "_client":
-            object.__setattr__(self, name, value)
-        else:
-            setattr(self._client, name, value)
-
-    def __str__(self):
-        return str(self._client)
-    
-    def __repr__(self):
-        return repr(self._client)
-
-    async def __call__(self, request, *args, **kwargs):
-        if isinstance(request, DeleteAccountRequest):
-            raise SecurityError("🚫 Ошибка безопасности: Модуль пытался удалить ваш аккаунт! Действие заблокировано.")
-        if isinstance(request, ResetAuthorizationsRequest):
-            raise SecurityError("🚫 Ошибка безопасности: Модуль пытался сбросить авторизации! Действие заблокировано.")
-        
-        return await self._client(request, *args, **kwargs)
-
-def get_safe_client(client):
-    return SafeClient(client)
+def get_safe_client(client_class=CustomTelegramClient):
+    """Возвращает класс кастомного клиента."""
+    return client_class
