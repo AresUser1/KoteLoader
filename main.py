@@ -252,6 +252,8 @@ async def start_clients():
         lang_code="ru",
         system_lang_code="ru-RU"
     )
+    # Сохраняем модель для отображения в логах и бэкапах
+    user_client.device_model = device_model
     
     await user_client.connect()
     if not await user_client.is_user_authorized():
