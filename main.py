@@ -322,7 +322,6 @@ async def start_clients():
                     bot_token = input("Введите токен бота: ").strip()
                     break
                 elif choice == "2":
-                    from handlers.bot_setup import auto_create_bot
                     bot_token = await auto_create_bot(user_client) 
                     if bot_token:
                         break
