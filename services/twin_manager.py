@@ -11,31 +11,16 @@ TWINS_FILE = Path(__file__).parent.parent / "twins.json"
 CONFIG_FILE = Path(__file__).parent.parent / "config.ini"
 
 def generate_device_info():
-    """Generates random device info to avoid detection/auth issues."""
-    os_choices = [
-        ("Windows", "10"),
-        ("Windows", "11"),
-        ("Android", "13"),
-        ("Android", "14"),
-        ("macOS", "14"),
-        ("iOS", "17")
+    """Генерирует реалистичные данные устройства."""
+    devices = [
+        ("Android 13", "Samsung SM-S908B", "10.5.0"),
+        ("Android 14", "Google Pixel 7 Pro", "10.6.1"),
+        ("iOS 16.6.1", "iPhone 14 Pro Max", "10.0.1"),
+        ("Windows 10", "PC 64bit", "4.15.2"),
+        ("macOS 14.2.1", "MacBook Pro", "10.3.1"),
+        ("Android 12", "Xiaomi 12 Pro", "10.1.2")
     ]
-    os_name, os_version = random.choice(os_choices)
-    
-    device_models = [
-        "Samsung Galaxy S23",
-        "Pixel 7",
-        "iPhone 14",
-        "Xiaomi 13",
-        "Desktop PC",
-        "MacBook Pro"
-    ]
-    
-    system_version = f"{os_name} {os_version}"
-    device_model = random.choice(device_models)
-    app_version = "1.0.0 KoteLoader Twin"
-    
-    return system_version, device_model, app_version
+    return random.choice(devices)
 
 class TwinManager:
     def __init__(self):
@@ -124,6 +109,23 @@ class TwinManager:
         t_api_id = twin_data.get("api_id") or self.global_api_id
         t_api_hash = twin_data.get("api_hash") or self.global_api_hash
 
+        # Проверка/генерация данных устройства для твинка
+        sys_ver = twin_data.get("system_version")
+        model = twin_data.get("device_model")
+        app_ver = twin_data.get("app_version")
+
+        if not all([sys_ver, model, app_ver]):
+            sys_ver, model, app_ver = generate_device_info()
+            twin_data["system_version"] = sys_ver
+            twin_data["device_model"] = model
+            twin_data["app_version"] = app_ver
+            
+            # Сохраняем обновленные данные твинка
+            all_twins = self.get_stored_twins()
+            all_twins[name] = twin_data
+            with open(TWINS_FILE, "w", encoding="utf-8") as f:
+                json.dump(all_twins, f, indent=4)
+
         if not t_api_id or not t_api_hash:
             # Если глобальные не загрузились сразу, пробуем перечитать
             self._load_config()
@@ -134,16 +136,15 @@ class TwinManager:
                 raise ValueError("API ID/Hash не найдены ни в твинке, ни в config.ini")
 
         try:
-            system_version, device_model, app_version = generate_device_info()
             client = TelegramClient(
                 StringSession(session_str), 
                 t_api_id, 
                 t_api_hash,
-                system_version=system_version,
-                device_model=device_model,
-                app_version=app_version,
-                lang_code="en",
-                system_lang_code="en-US"
+                system_version=sys_ver,
+                device_model=model,
+                app_version=app_ver,
+                lang_code="ru",
+                system_lang_code="ru-RU"
             )
             await client.connect()
             
