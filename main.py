@@ -241,16 +241,9 @@ async def start_clients():
     print(f"📱 Устройство: {device_model} ({system_version})")
     
     session_file = f"{session_name}.session"
-    
-    # Если файла сессии нет, используем MemorySession для чистой настройки
-    if not os.path.exists(session_file):
-        print("💡 Создаю временную сессию в памяти для безопасного входа...")
-        current_session = MemorySession()
-    else:
-        current_session = session_name
 
     user_client = CustomTelegramClient(
-        current_session, 
+        session_name, 
         api_id, 
         api_hash,
         system_version=system_version,
@@ -262,25 +255,49 @@ async def start_clients():
     
     await user_client.connect()
     if not await user_client.is_user_authorized():
-        if os.path.exists(config_file) and os.path.exists(session_file):
-            print(f"\n⚠️ Сессия '{session_name}' не авторизована.")
-            # ... (выбор 1/2 остается прежним)
+        if os.path.exists(config_file) or os.path.exists(session_file):
+            print(f"\n⚠️ Сессия '{session_name}' не авторизована (возможно, слетела).")
+            print("1. Попробовать войти заново (сохранить текущие данные и настройки)")
+            print("2. Перезаписать всё (удалить конфигурацию, базу данных и начать с нуля)")
+            
+            while True:
+                choice = input("Ваш выбор (1/2): ").strip()
+                if choice == "1":
+                    break
+                elif choice == "2":
+                    print("🗑 Удаление старых данных...")
+                    await user_client.disconnect()
+                    for file in [config_file, session_file, "database.db", "database.db-shm", "database.db-wal"]:
+                        if os.path.exists(file):
+                            try: os.remove(file)
+                            except: pass
+                    print("✅ Данные очищены. Пожалуйста, запустите бота снова для чистой настройки.")
+                    exit()
+                else:
+                    print("Введите 1 или 2.")
         
-        phone_number = input("Введите номер телефона (например +79001234567): ")
-        await user_client.start(phone=phone_number)
-        
-        # Если мы зашли через MemorySession, нужно её сохранить на диск
-        if isinstance(current_session, MemorySession):
-            print("💾 Сохраняю авторизованную сессию на диск...")
-            # В Telethon SQLiteSession создается автоматически при указании имени файла
-            # Мы просто переподключимся с нормальным именем файла один раз
-            await user_client.disconnect()
-            user_client = CustomTelegramClient(
-                session_name, api_id, api_hash,
-                system_version=system_version, device_model=device_model, app_version=app_version,
-                lang_code="ru", system_lang_code="ru-RU"
-            )
-            await user_client.start()
+        # --- РУЧНОЙ ВХОД (Manual Flow) С КРАСИВЫМИ ТЕКСТАМИ ---
+        phone_number = input("\n📱 Введите номер телефона (например +79001234567): ")
+        try:
+            from telethon import errors
+            sent_code = await user_client.send_code_request(phone_number)
+            print(f"✅ Код успешно отправлен в Telegram на номер {phone_number}")
+            
+            code = input("💬 Введите код подтверждения из Telegram: ")
+            try:
+                await user_client.sign_in(phone_number, code, password=None)
+            except errors.SessionPasswordNeededError:
+                # Ввод пароля (сделан видимым по запросу)
+                password = input("🔐 Аккаунт защищен облачным паролем.\nВведите пароль (будет виден): ")
+                await user_client.sign_in(password=password)
+                
+        except errors.PhonePasswordFloodError:
+            print("\n❌ \033[91mTelegram временно заблокировал вход для этого номера из-за частых попыток.\033[0m")
+            print("⏳ Пожалуйста, подождите от 30 минут до 24 часов перед следующей попыткой.")
+            exit()
+        except Exception as e:
+            print(f"\n❌ Ошибка при входе: {e}")
+            exit()
     else:
         await user_client.start()
 
@@ -303,6 +320,7 @@ async def start_clients():
                     bot_token = input("Введите токен бота: ").strip()
                     break
                 elif choice == "2":
+                    from handlers.bot_setup import auto_create_bot
                     bot_token = await auto_create_bot(user_client) 
                     if bot_token:
                         break
