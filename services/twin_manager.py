@@ -10,18 +10,6 @@ from configparser import ConfigParser
 TWINS_FILE = Path(__file__).parent.parent / "twins.json"
 CONFIG_FILE = Path(__file__).parent.parent / "config.ini"
 
-def generate_device_info():
-    """Генерирует реалистичные данные устройства."""
-    devices = [
-        ("Android 13", "Samsung SM-S908B", "10.5.0"),
-        ("Android 14", "Google Pixel 7 Pro", "10.6.1"),
-        ("iOS 16.6.1", "iPhone 14 Pro Max", "10.0.1"),
-        ("Windows 10", "PC 64bit", "4.15.2"),
-        ("macOS 14.2.1", "MacBook Pro", "10.3.1"),
-        ("Android 12", "Xiaomi 12 Pro", "10.1.2")
-    ]
-    return random.choice(devices)
-
 class TwinManager:
     def __init__(self):
         self.clients = {}
@@ -109,23 +97,6 @@ class TwinManager:
         t_api_id = twin_data.get("api_id") or self.global_api_id
         t_api_hash = twin_data.get("api_hash") or self.global_api_hash
 
-        # Проверка/генерация данных устройства для твинка
-        sys_ver = twin_data.get("system_version")
-        model = twin_data.get("device_model")
-        app_ver = twin_data.get("app_version")
-
-        if not all([sys_ver, model, app_ver]):
-            sys_ver, model, app_ver = generate_device_info()
-            twin_data["system_version"] = sys_ver
-            twin_data["device_model"] = model
-            twin_data["app_version"] = app_ver
-            
-            # Сохраняем обновленные данные твинка
-            all_twins = self.get_stored_twins()
-            all_twins[name] = twin_data
-            with open(TWINS_FILE, "w", encoding="utf-8") as f:
-                json.dump(all_twins, f, indent=4)
-
         if not t_api_id or not t_api_hash:
             # Если глобальные не загрузились сразу, пробуем перечитать
             self._load_config()
@@ -139,12 +110,7 @@ class TwinManager:
             client = TelegramClient(
                 StringSession(session_str), 
                 t_api_id, 
-                t_api_hash,
-                system_version=sys_ver,
-                device_model=model,
-                app_version=app_ver,
-                lang_code="ru",
-                system_lang_code="ru-RU"
+                t_api_hash
             )
             await client.connect()
             
