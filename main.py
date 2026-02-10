@@ -10,7 +10,6 @@ from configparser import ConfigParser
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession, MemorySession
 from telethon.errors import AccessTokenInvalidError, AccessTokenExpiredError, FloodWaitError
-from utils.security import CustomTelegramClient
 
 LOG_FILE = "kote_loader.log"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -30,49 +29,9 @@ except ImportError as e:
 
 START_TIME = time.time()
 
-def generate_device_info():
-    """Генерирует реалистичные данные устройства на основе паттернов официальных клиентов."""
-    devices = [
-        ("Android 13", "Samsung SM-S908B", "10.5.0"),
-        ("Android 14", "Google Pixel 7 Pro", "10.6.1"),
-        ("iOS 16.6.1", "iPhone 14 Pro Max", "10.0.1"),
-        ("Windows 10", "PC 64bit", "4.15.2"),
-        ("macOS 14.2.1", "MacBook Pro", "10.3.1"),
-        ("Android 12", "Xiaomi 12 Pro", "10.1.2")
-    ]
-    sys_ver, model, app_ver = random.choice(devices)
-    # Используем чистую версию приложения без лишних меток, чтобы не привлекать внимание
-    return sys_ver, model, app_ver
-
 async def heartbeat():
     while True:
         await asyncio.sleep(60)
-
-async def make_cloud_backup(client):
-    """Отправляет бэкап конфига и базы в Saved Messages."""
-    try:
-        files = ["config.ini", "database.db", "twins.json"]
-        existing_files = [f for f in files if os.path.exists(f)]
-        
-        if not existing_files:
-            return
-
-        caption = f"📦 **KoteLoader Cloud Backup**\n📅 Дата: `{time.ctime()}`\n💻 Устройство: `{getattr(client, 'device_model', 'Unknown')}`"
-        
-        # Отправляем файлы в 'me' (Saved Messages)
-        await client.send_file("me", existing_files, caption=caption)
-        logging.info("✅ Облачный бэкап успешно создан в Saved Messages")
-    except Exception as e:
-        logging.error(f"❌ Ошибка при создании бэкапа: {e}")
-
-async def backup_worker(client):
-    """Воркер, который делает бэкап каждые 12 часов."""
-    # Подождем немного после запуска
-    await asyncio.sleep(30)
-    while True:
-        await make_cloud_backup(client)
-        # 12 часов в секундах
-        await asyncio.sleep(12 * 3600)
 
 async def ensure_inline_mode_enabled(user_client, bot_username):
     try:
@@ -224,82 +183,67 @@ async def start_clients():
         api_hash = config.get("telethon", "api_hash")
         session_name = config.get("telethon", "session_name")
 
-    # --- ПРАВКА: Постоянные данные устройства ---
-    if not config.has_option("telethon", "system_version"):
-        sys_ver, model, app_ver = generate_device_info()
-        config.set("telethon", "system_version", sys_ver)
-        config.set("telethon", "device_model", model)
-        config.set("telethon", "app_version", app_ver)
-        with open(config_file, 'w', encoding='utf-8') as f:
-            config.write(f)
-    
-    system_version = config.get("telethon", "system_version")
-    device_model = config.get("telethon", "device_model")
-    app_version = config.get("telethon", "app_version")
+    # --- ПРАВКА: Используем стандартные параметры юзербота ---
+    system_version = "Linux"
+    device_model = "KoteLoader"
+    app_version = "2.0.0"
 
     print(f"\n🚀 Подключение к аккаунту ({session_name})...")
-    print(f"📱 Устройство: {device_model} ({system_version})")
+    print(f"📱 Режим: Стандартный Юзербот")
     
-    session_file = f"{session_name}.session"
-
-    user_client = CustomTelegramClient(
+    user_client = TelegramClient(
         session_name, 
         api_id, 
-        api_hash,
-        system_version=system_version,
-        device_model=device_model,
-        app_version=app_version,
-        lang_code="ru",
-        system_lang_code="ru-RU"
+        api_hash
     )
-    # Сохраняем модель для отображения в логах и бэкапах
-    user_client.device_model = device_model
+    user_client.device_model = "KoteLoader" # Только для текста в бэкапах
     
     await user_client.connect()
     if not await user_client.is_user_authorized():
-        if os.path.exists(config_file) or os.path.exists(session_file):
-            print(f"\n⚠️ Сессия '{session_name}' не авторизована (возможно, слетела).")
-            print("1. Попробовать войти заново (сохранить текущие данные и настройки)")
-            print("2. Перезаписать всё (удалить конфигурацию, базу данных и начать с нуля)")
-            
-            while True:
-                choice = input("Ваш выбор (1/2): ").strip()
-                if choice == "1":
-                    break
-                elif choice == "2":
-                    print("🗑 Удаление старых данных...")
-                    await user_client.disconnect()
-                    for file in [config_file, session_file, "database.db", "database.db-shm", "database.db-wal"]:
-                        if os.path.exists(file):
-                            try: os.remove(file)
-                            except: pass
-                    print("✅ Данные очищены. Пожалуйста, запустите бота снова для чистой настройки.")
-                    exit()
-                else:
-                    print("Введите 1 или 2.")
+        print("\n🔐 **Авторизация не найдена.** Выберите способ входа:")
+        print("1. По номеру телефона (через СМС/Код в приложении)")
+        print("2. Через QR-код (быстро и безопасно)")
         
-        # --- РУЧНОЙ ВХОД (Manual Flow) С КРАСИВЫМИ ТЕКСТАМИ ---
-        phone_number = input("\n📱 Введите номер телефона (например +79001234567): ")
-        try:
-            from telethon import errors
-            sent_code = await user_client.send_code_request(phone_number)
-            print(f"✅ Код успешно отправлен в Telegram на номер {phone_number}")
-            
-            code = input("💬 Введите код подтверждения из Telegram: ")
+        choice = input("\nВаш выбор (1/2): ").strip()
+        
+        if choice == "2":
+            # --- ВХОД ПО QR-КОДУ ---
+            qr_login = await user_client.qr_login()
+            print("\n" + "="*40)
+            print("📖 **ИНСТРУКЦИЯ ПО ВХОДУ ЧЕРЕЗ QR:**")
+            print("1. Откройте Telegram на вашем основном телефоне.")
+            print("2. Перейдите в 'Настройки' -> 'Устройства'.")
+            print("3. Нажмите кнопку 'Подключить устройство'.")
+            print("4. Наведите камеру на QR-код ниже.")
+            print("="*40 + "\n")
+
+            while not qr_login.is_logged_in:
+                # Генерируем QR в консоли
+                try:
+                    import qrcode
+                    qr = qrcode.QRCode(version=1, border=1)
+                    qr.add_data(qr_login.url)
+                    qr.make(fit=True)
+                    # Вывод в консоль (используем инверсию цветов для темных тем)
+                    qr.print_ascii(invert=True)
+                except ImportError:
+                    print(f"🔗 Ссылка для входа (если нет qrcode): {qr_login.url}")
+                    print("⚠️ Установите 'pip install qrcode', чтобы видеть код прямо здесь.")
+
+                print("\n⌛ Ожидание сканирования... (Код обновится через 30 сек)")
+                try:
+                    await qr_login.wait(timeout=30)
+                except asyncio.TimeoutError:
+                    # Обновляем токен, если время вышло
+                    qr_login = await user_client.qr_login()
+        else:
+            # --- СТАНДАРТНЫЙ ВХОД ---
+            phone_number = input("\n📱 Введите номер телефона (например +79001234567): ")
             try:
-                await user_client.sign_in(phone_number, code, password=None)
-            except errors.SessionPasswordNeededError:
-                # Ввод пароля (сделан видимым по запросу)
-                password = input("🔐 Аккаунт защищен облачным паролем.\nВведите пароль (будет виден): ")
-                await user_client.sign_in(password=password)
-                
-        except errors.PhonePasswordFloodError:
-            print("\n❌ \033[91mTelegram временно заблокировал вход для этого номера из-за частых попыток.\033[0m")
-            print("⏳ Пожалуйста, подождите от 30 минут до 24 часов перед следующей попыткой.")
-            exit()
-        except Exception as e:
-            print(f"\n❌ Ошибка при входе: {e}")
-            exit()
+                await user_client.start(phone=phone_number)
+            except Exception as e:
+                print(f"\n❌ \033[91mОшибка при входе: {e}\033[0m")
+                exit()
     else:
         await user_client.start()
 
@@ -398,7 +342,6 @@ async def main():
     if not user_client: return
         
     worker_task = asyncio.create_task(command_worker(user_client))
-    backup_task = asyncio.create_task(backup_worker(user_client))
     
     print("👥 Запускаю твинков...")
     try:
@@ -410,8 +353,8 @@ async def main():
     print("\n🟢 KoteLoader полностью запущен! Напишите help в чате.")
     
     try:
-        # Добавляем heartbeat и backup в список задач
-        tasks = [worker_task, backup_task, user_client.run_until_disconnected(), heartbeat()]
+        # Добавляем heartbeat в список задач
+        tasks = [worker_task, user_client.run_until_disconnected(), heartbeat()]
         if bot_client: 
             tasks.append(bot_client.run_until_disconnected())
         await asyncio.gather(*tasks)
