@@ -60,30 +60,12 @@ async def inline_query_handler(event: events.InlineQuery):
     """
     Динамически обрабатывает инлайн-запросы, находя подходящий обработчик.
     """
+    if db.get_user_level(event.sender_id) not in ["OWNER", "TRUSTED"]:
+        return
+
     query_text = event.text.strip()
 
-    # Исключение для секреток (включая прямой ввод текста)
-    is_wisp = query_text.startswith("wisp:") or query_text.startswith("wisp ")
-    
-    if not is_wisp:
-        if db.get_user_level(event.sender_id) not in ["OWNER", "TRUSTED"]:
-            return
-
     try:
-        # Прямой ввод: wisp <target> <text>
-        if query_text.startswith("wisp "):
-            match = re.match(r"^wisp\s+(\d+|@\w+)\s+(.*)", query_text, re.DOTALL)
-            if match:
-                target, message_text = match.group(1), match.group(2).strip()
-                
-                # Короткое превью для инлайна
-                display_text = message_text[:30] + "..." if len(message_text) > 30 else message_text
-                
-                # Мы не создаем запись в БД здесь, а передаем параметры в callback
-                # Но лучше вызвать функцию из модуля wisp, если она там есть.
-                # Для простоты, мы делегируем это существующему реестру инлайнов.
-                pass 
-
         if query_text == "updates:check":
             
             text = "⚙️ <b>Центр обновлений</b>\n\nНажмите кнопку ниже, чтобы запустить поиск обновлений для ваших модулей."
@@ -131,13 +113,22 @@ async def inline_query_handler(event: events.InlineQuery):
             match = pattern.match(query_text)
             if match:
                 event.pattern_match = match
-                text, buttons = await handler_info["func"](event)
-                result = event.builder.article(
-                    title=handler_info["title"],
-                    description=handler_info["description"],
-                    text=text, buttons=buttons, parse_mode="html"
-                )
-                await event.answer([result])
+                # Хендлер может вернуть: 
+                # 1. (text, buttons) -> тогда создаем статью (article)
+                # 2. list[InputBotInlineResult] -> тогда используем его напрямую
+                res = await handler_info["func"](event)
+                
+                if isinstance(res, list):
+                    # Если хендлер сам подготовил список результатов (например, видео)
+                    await event.answer(res)
+                else:
+                    text, buttons = res
+                    result = event.builder.article(
+                        title=handler_info["title"],
+                        description=handler_info["description"],
+                        text=text, buttons=buttons, parse_mode="html"
+                    )
+                    await event.answer([result])
                 return
 
         text, buttons = build_main_panel(search_query=query_text, as_text=True)
@@ -154,18 +145,10 @@ async def callback_query_handler(event: events.CallbackQuery):
     """
     Динамически обрабатывает нажатия на инлайн-кнопки.
     """
-    try:
-        data = event.data.decode()
-    except:
-        data = ""
+    if db.get_user_level(event.sender_id) not in ["OWNER", "TRUSTED"]:
+        return await event.answer("🚫 Доступ запрещён.", alert=True)
 
-    # Исключение для секретных сообщений и других публичных функций
-    is_public = data.startswith("wisp_read:")
-    
-    if not is_public:
-        if db.get_user_level(event.sender_id) not in ["OWNER", "TRUSTED"]:
-            return await event.answer("🚫 Доступ запрещён.", alert=True)
-
+    data = event.data.decode()
     user_client = event.client.user_client
 
     try:
@@ -287,23 +270,10 @@ async def callback_query_handler(event: events.CallbackQuery):
             text, buttons = build_main_panel(page=page, as_text=True)
 
         elif data.startswith("module:"):
-            module_name = data.split(":")[1].lower()
-            
-            # Проверка доступа для TRUSTED
-            if db.get_user_level(event.sender_id) == "TRUSTED":
-                # Сначала персональные, потом глобальные
-                allowed = db.get_setting(f"allowed_mods_{event.sender_id}")
-                if not allowed:
-                    allowed = db.get_setting("allowed_mods_TRUSTED", default="wisp")
-                
-                if allowed.lower() != "all" and module_name not in [m.strip().lower() for m in allowed.split(",")]:
-                    return await event.answer("🚫 У вас нет доступа к этому модулю.", alert=True)
-
+            module_name = data.split(":")[1]
             text, buttons = build_module_menu(module_name, as_text=True)
 
         elif data == "global_menu":
-            if db.get_user_level(event.sender_id) == "TRUSTED":
-                 return await event.answer("🚫 Глобальное меню доступно только владельцу.", alert=True)
             text, buttons = build_global_menu(as_text=True)
 
         elif data in ["back_to_main", "refresh"]:
