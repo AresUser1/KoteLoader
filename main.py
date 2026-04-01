@@ -165,10 +165,22 @@ async def start_clients():
     if os.path.exists(config_file):
         config.read(config_file, encoding='utf-8')
     
+    # ── быстрые хелперы до инициализации клиента ────────────────────────────
+    _C="\033[96m"; _Y="\033[93m"; _W="\033[97m"; _M="\033[95m"
+    _G="\033[92m"; _DIM="\033[2m"; _RST="\033[0m"
+    def _info(t):   print(f"  {_C}›{_RST} {t}")
+    def _prompt(t): return input(f"  {_M}?{_RST} {t}: ").strip()
+    def _banner(t):
+        print(f"\n{_C}╭{'─'*44}╮{_RST}")
+        print(f"{_C}│{_RST}  {_W}{t:<42}{_RST}{_C}│{_RST}")
+        print(f"{_C}╰{'─'*44}╯{_RST}")
+
     if not config.has_section("telethon"):
-        print(f"⚙️ Файл конфигурации не найден. Приступим к настройке.")
-        api_id = input("Введите api_id: ")
-        api_hash = input("Введите api_hash: ")
+        _banner("ПЕРВОНАЧАЛЬНАЯ НАСТРОЙКА  •  KoteLoader")
+        _info(f"Получи данные на {_Y}my.telegram.org{_RST} → API development tools")
+        print()
+        api_id   = _prompt("api_id")
+        api_hash = _prompt("api_hash")
         session_name = "my_account"
         
         config['telethon'] = {
@@ -188,8 +200,7 @@ async def start_clients():
     device_model = "KoteLoader"
     app_version = "2.0.0"
 
-    print(f"\n🚀 Подключение к аккаунту ({session_name})...")
-    print(f"📱 Режим: Стандартный Юзербот")
+    _info(f"Сессия: {_Y}{session_name}{_RST}  {_DIM}•  подключаюсь...{_RST}")
     
     user_client = TelegramClient(
         session_name, 
@@ -197,57 +208,157 @@ async def start_clients():
         api_hash
     )
     user_client.device_model = "KoteLoader" # Только для текста в бэкапах
-    
+
+    # ── КАСТОМНЫЕ ЦВЕТА ─────────────────────────────────────────────────────
+    R  = "\033[91m"; G  = "\033[92m"; Y  = "\033[93m"; C  = "\033[96m"
+    B  = "\033[94m"; M  = "\033[95m"; W  = "\033[97m"; DIM= "\033[2m"; RST= "\033[0m"
+
+    def banner(text):
+        line = "─" * 44
+        print(f"\n{C}╭{line}╮{RST}")
+        print(f"{C}│{RST}  {W}{text:<42}{RST}{C}│{RST}")
+        print(f"{C}╰{line}╯{RST}")
+
+    def info(text):   print(f"  {C}›{RST} {text}")
+    def ok(text):     print(f"  {G}✔{RST} {text}")
+    def err(text):    print(f"  {R}✘{RST} {text}")
+    def warn(text):   print(f"  {Y}⚠{RST} {text}")
+    def prompt(text): return input(f"  {M}?{RST} {text}: ").strip()
+    # ────────────────────────────────────────────────────────────────────────
+
     await user_client.connect()
+
     if not await user_client.is_user_authorized():
-        print("\n🔐 **Авторизация не найдена.** Выберите способ входа:")
-        print("1. По номеру телефона (через СМС/Код в приложении)")
-        print("2. Через QR-код (быстро и безопасно)")
-        
-        choice = input("\nВаш выбор (1/2): ").strip()
-        
-        if choice == "2":
-            # --- ВХОД ПО QR-КОДУ ---
-            qr_login = await user_client.qr_login()
-            print("\n" + "="*40)
-            print("📖 **ИНСТРУКЦИЯ ПО ВХОДУ ЧЕРЕЗ QR:**")
-            print("1. Откройте Telegram на вашем основном телефоне.")
-            print("2. Перейдите в 'Настройки' -> 'Устройства'.")
-            print("3. Нажмите кнопку 'Подключить устройство'.")
-            print("4. Наведите камеру на QR-код ниже.")
-            print("="*40 + "\n")
+        banner("АВТОРИЗАЦИЯ  •  KoteLoader")
+        print(f"\n  {DIM}Выберите способ входа:{RST}")
+        print(f"  {Y}1{RST} — По номеру телефона")
+        print(f"  {Y}2{RST} — Через QR-код\n")
 
-            while not qr_login.is_logged_in:
-                # Генерируем QR в консоли
+        while True:
+            choice = prompt("Ваш выбор (1/2)")
+            if choice in ("1", "2"):
+                break
+            warn("Введите 1 или 2")
+
+        async def _enter_2fa():
+            from telethon.errors import PasswordHashInvalidError
+            while True:
+                pwd = input(f"  {M}?{RST} Пароль 2FA: ").strip()
                 try:
-                    import qrcode
-                    qr = qrcode.QRCode(version=1, border=1)
-                    qr.add_data(qr_login.url)
-                    qr.make(fit=True)
-                    # Вывод в консоль (используем инверсию цветов для темных тем)
-                    qr.print_ascii(invert=True)
-                except ImportError:
-                    print(f"🔗 Ссылка для входа (если нет qrcode): {qr_login.url}")
-                    print("⚠️ Установите 'pip install qrcode', чтобы видеть код прямо здесь.")
+                    await user_client.sign_in(password=pwd)
+                    ok("2FA пройдена успешно!")
+                    return
+                except PasswordHashInvalidError:
+                    err("Неверный пароль — попробуй ещё раз")
+                except Exception as ex:
+                    err(f"Ошибка 2FA: {ex}")
+                    raise
 
-                print("\n⌛ Ожидание сканирования... (Код обновится через 30 сек)")
+        if choice == "2":
+            banner("ВХОД ЧЕРЕЗ QR-КОД")
+            print(f"\n  {DIM}Инструкция:{RST}")
+            info(f"{W}Telegram{RST} → {Y}Настройки{RST} → {Y}Устройства{RST} → {Y}Подключить устройство{RST}")
+            info("Наведи камеру на QR-код ниже\n")
+
+            qr_login = await user_client.qr_login()
+            logged_in = False
+            attempt = 0
+
+            while not logged_in:
+                attempt += 1
+                print(f"  {DIM}[ QR #{attempt}  •  обновится через 30 сек ]{RST}\n")
+                try:
+                    import qrcode as _qrcode
+                    _qr = _qrcode.QRCode(version=1, border=1)
+                    _qr.add_data(qr_login.url)
+                    _qr.make(fit=True)
+                    _qr.print_ascii(invert=True)
+                except ImportError:
+                    info(f"Ссылка для входа: {C}{qr_login.url}{RST}")
+                    warn("pip install qrcode  — для отображения QR здесь")
+
+                print(f"\n  {DIM}⌛ Ожидаю сканирования...{RST}")
                 try:
                     await qr_login.wait(timeout=30)
+                    logged_in = True
                 except asyncio.TimeoutError:
-                    # Обновляем токен, если время вышло
+                    warn("Время вышло — генерирую новый QR...")
                     qr_login = await user_client.qr_login()
-        else:
-            # --- СТАНДАРТНЫЙ ВХОД ---
-            phone_number = input("\n📱 Введите номер телефона (например +79001234567): ")
-            try:
-                await user_client.start(phone=phone_number)
-            except Exception as e:
-                print(f"\n❌ \033[91mОшибка при входе: {e}\033[0m")
-                exit()
-    else:
-        await user_client.start()
+                except Exception as ex:
+                    if "SessionPasswordNeeded" in type(ex).__name__:
+                        print()
+                        banner("ДВУХФАКТОРНАЯ АУТЕНТИФИКАЦИЯ")
+                        info("На аккаунте включена 2FA")
+                        await _enter_2fa()
+                        logged_in = True
+                    else:
+                        err(f"Неожиданная ошибка: {ex}")
+                        raise
 
-    print("✅ Успешный вход в аккаунт!")
+        else:
+            banner("ВХОД ПО НОМЕРУ ТЕЛЕФОНА")
+            phone_number = prompt("Номер (например +79001234567)")
+            print()
+
+            async def _send_code(force_sms=False):
+                try:
+                    sent = await user_client.send_code_request(phone_number, force_sms=force_sms)
+                    method = "СМС" if force_sms else sent.type.__class__.__name__
+                    info(f"Код отправлен  {DIM}({method}){RST}")
+                    return sent
+                except Exception as e:
+                    err(f"Не удалось отправить код: {e}")
+                    exit(1)
+
+            sent = await _send_code(force_sms=False)
+            signed_in = False
+
+            while not signed_in:
+                print(f"\n  {DIM}Введи код — или выбери действие:{RST}")
+                print(f"  {Y}r{RST} — Отправить код повторно (в приложение)")
+                print(f"  {Y}s{RST} — Отправить через СМС")
+                print(f"  {Y}q{RST} — Выйти\n")
+
+                code = prompt("Код / r / s / q")
+
+                if code.lower() == "q":
+                    exit(0)
+                elif code.lower() in ("r", "s"):
+                    force = code.lower() == "s"
+                    sent = await _send_code(force_sms=force)
+                    continue
+                elif not code.strip():
+                    warn("Пустой ввод — попробуй ещё раз")
+                    continue
+
+                try:
+                    await user_client.sign_in(phone_number, code, phone_code_hash=sent.phone_code_hash)
+                    signed_in = True
+                except Exception as ex:
+                    ex_name = type(ex).__name__
+                    if "SessionPasswordNeeded" in ex_name:
+                        print()
+                        banner("ДВУХФАКТОРНАЯ АУТЕНТИФИКАЦИЯ")
+                        info("На аккаунте включена 2FA")
+                        await _enter_2fa()
+                        signed_in = True
+                    elif "PhoneCodeInvalid" in ex_name:
+                        err("Неверный код — попробуй ещё раз или нажми r/s для нового")
+                    elif "PhoneCodeExpired" in ex_name:
+                        err("Код устарел!")
+                        warn("Нажми  r  чтобы запросить новый")
+                    elif "FloodWait" in ex_name:
+                        secs = getattr(ex, "seconds", "?")
+                        err(f"Слишком много попыток — подожди {secs} сек")
+                        exit(1)
+                    else:
+                        err(f"Ошибка входа: {ex}")
+                        exit(1)
+
+    me = await user_client.get_me()
+    name = f"{me.first_name or ''} {me.last_name or ''}".strip() or me.username or str(me.id)
+    ok(f"Вошёл как  {W}{name}{RST}  {DIM}(id: {me.id}){RST}")
+
     await ensure_folder_added(user_client)
 
     bot_client = None
