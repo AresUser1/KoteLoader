@@ -1,0 +1,7 @@
+telethon
+aiohttp
+psutil
+gitpython
+distro
+aiogram
+qrcode
