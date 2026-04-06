@@ -773,6 +773,9 @@ class _FakeInlineResult:
         if isinstance(buttons, list):
             return buttons
         try:
+            # Уже готовые Telethon кнопки — возвращаем как есть
+            if isinstance(buttons, list):
+                return buttons
             from aiogram.types import InlineKeyboardMarkup as AioMarkup
             from telethon.tl.custom import Button as TgButton
             if isinstance(buttons, AioMarkup):
@@ -1331,6 +1334,11 @@ class _AllModules:
                         "pydub": "pydub",
                         "qrcode": "qrcode",
                         "barcode": "python-barcode",
+                        "toml": "toml",
+                        "tomllib": "tomli",
+                        "mutagen": "mutagen",
+                        "ffmpeg": "ffmpeg-python",
+                        "cryptography": "cryptography",
                     }
                     _pkg = _PKG_MAP.get(_pkg_raw, _pkg_raw)
                     logger.info(f"[compat] register_module: missing {_pkg_raw!r}, installing as {_pkg!r}...")
@@ -1478,6 +1486,35 @@ class _AllModules:
                     break
 
             if matched_func is None:
+                # ── Ищем обычный @inline_handler из utils/loader.py (не hikka, не raw) ──
+                # Например namelist из name_manager: возвращает (text, buttons)
+                for _npat, _nentry in _IHR.items():
+                    if _nentry.get("hikka_style") or _nentry.get("_raw_handler"):
+                        continue
+                    _nm = _npat.match(query_text)
+                    if _nm:
+                        try:
+                            class _FakeNativeEvent:
+                                pass
+                            _nev = _FakeNativeEvent()
+                            _nev.pattern_match = _nm
+                            _nev.text = query_text
+                            _nresult = await _nentry["func"](_nev)
+                            if isinstance(_nresult, tuple) and len(_nresult) == 2:
+                                _ntext, _nbuttons = _nresult
+                                return [_FakeInlineResult(
+                                    title=_nentry.get("title", query_text),
+                                    message=_ntext,
+                                    buttons=_nbuttons,
+                                    client=_iq_client_ref,
+                                    bot_client=_iq_bot_ref,
+                                    inline_query=query_text,
+                                )]
+                        except Exception as _ne:
+                            logger.warning(f"[compat] inline_query native handler error: {_ne}")
+                            import traceback; traceback.print_exc()
+                        return []
+
                 logger.warning(f"[compat] inline_query: нет обработчика для {query_text!r}")
                 return []
 

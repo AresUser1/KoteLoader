@@ -635,6 +635,35 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
                 break
 
         if matched_func is None:
+            # ── 3. Обычные @inline_handler из utils/loader.py (не hikka_style) ──
+            # Например, namelist из name_manager.py
+            for _npat, _nentry in _IHR.items():
+                if _nentry.get("hikka_style") or _nentry.get("_raw_handler"):
+                    continue
+                _nm = _npat.match(query_text)
+                if _nm:
+                    try:
+                        class _FakeNativeEvent:
+                            pass
+                        _nev = _FakeNativeEvent()
+                        _nev.pattern_match = _nm
+                        _nev.text = query_text
+                        _result = await _nentry["func"](_nev)
+                        if isinstance(_result, tuple) and len(_result) == 2:
+                            _text, _buttons = _result
+                            return [_FakeInlineResult(
+                                title=_nentry.get("title", query_text),
+                                message=_text,
+                                buttons=_buttons,
+                                client=_iq_client_ref,
+                                bot_client=_iq_bot_ref,
+                                inline_query=query_text,
+                            )]
+                    except Exception as _ne:
+                        logger.warning(f"[compat] inline_query native handler error: {_ne}")
+                        import traceback; traceback.print_exc()
+                    return []
+
             logger.warning(f"[compat] inline_query: нет hikka обработчика для {query_text!r}")
             return []
 
