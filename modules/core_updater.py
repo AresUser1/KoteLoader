@@ -11,6 +11,7 @@ author: Kote
 """
 
 import asyncio
+import subprocess
 import traceback
 import time
 import os
@@ -47,26 +48,31 @@ async def update_core_cmd(event):
             {"text": f"{prefix}updatecore confirm", "entity": MessageEntityCode}
         ])
 
+    def _run_git(cmd: list) -> tuple[int, str]:
+        """Синхронный запуск git-команды (совместимо с Python 3.12)."""
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore'
+        )
+        output = result.stdout.strip() or result.stderr.strip()
+        return result.returncode, output
+
     try:
         await build_and_edit(event, [
             {"text": "⚙️"},
             {"text": " Начинаю обновление ядра...", "entity": MessageEntityBold},
             {"text": "\n(1/3) Получаю данные (git fetch)..."}
         ])
-        
-        process_fetch = await asyncio.create_subprocess_shell(
-            f"git fetch {repo_url}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout_f, stderr_f = await process_fetch.communicate()
 
-        if process_fetch.returncode != 0:
-            error = stderr_f.decode('utf-8', 'ignore').strip() or stdout_f.decode('utf-8', 'ignore').strip()
+        loop = asyncio.get_event_loop()
+        rc_f, out_f = await loop.run_in_executor(
+            None, _run_git, ["git", "fetch", repo_url]
+        )
+
+        if rc_f != 0:
             return await build_and_edit(event, [
                 {"text": "❌"},
                 {"text": " Ошибка 'git fetch':", "entity": MessageEntityBold},
-                {"text": f"\n{error}", "entity": MessageEntityCode}
+                {"text": f"\n{out_f}", "entity": MessageEntityCode}
             ])
 
         await build_and_edit(event, [
@@ -74,17 +80,12 @@ async def update_core_cmd(event):
              {"text": " Обновление ядра...", "entity": MessageEntityBold},
              {"text": "\n(2/3) Перезаписываю файлы (git reset --hard FETCH_HEAD)..."}
         ])
-        
-        process_reset = await asyncio.create_subprocess_shell(
-            "git reset --hard FETCH_HEAD",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout_r, stderr_r = await process_reset.communicate()
-        
-        reset_output = stdout_r.decode('utf-8', 'ignore').strip() or stderr_r.decode('utf-8', 'ignore').strip()
 
-        if process_reset.returncode != 0:
+        rc_r, reset_output = await loop.run_in_executor(
+            None, _run_git, ["git", "reset", "--hard", "FETCH_HEAD"]
+        )
+
+        if rc_r != 0:
             return await build_and_edit(event, [
                 {"text": "❌"},
                 {"text": " Ошибка 'git reset':", "entity": MessageEntityBold},
