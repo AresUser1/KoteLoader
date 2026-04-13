@@ -3,5 +3,4 @@ aiohttp
 psutil
 gitpython
 distro
-aiogram
 qrcode

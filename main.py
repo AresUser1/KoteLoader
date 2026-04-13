@@ -492,6 +492,19 @@ async def main():
     try:
         twins_count = await twin_manager.start_all_twins()
         print(f"✅ Запущено твинков: {twins_count}")
+        # Регистрируем watcher Silent Tags на каждом твин-клиенте
+        try:
+            from modules.stags import twin_silent_tags_watcher
+            from telethon import events as _tl_events
+            for _twin_name, _twin_client in twin_manager.clients.items():
+                _twin_client._twin_name = _twin_name
+                _twin_client.add_event_handler(
+                    twin_silent_tags_watcher,
+                    _tl_events.NewMessage(incoming=True)
+                )
+            print(f"[stags] Twin watchers зарегистрированы для {len(twin_manager.clients)} твинков.")
+        except Exception as _twe:
+            print(f"[stags] Не удалось зарегистрировать twin watchers: {_twe}")
     except Exception as e:
         print(f"⚠️ Ошибка при запуске твинков: {e}")
 

@@ -365,7 +365,18 @@ class _InlineManager:
     def generate_aiogram_markup(self, buttons):
         """Конвертирует список кнопок Heroku в aiogram InlineKeyboardMarkup.
         Используется для InlineQueryResultArticle и других aiogram-объектов."""
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        # Stub-классы вместо aiogram (не требуют установки библиотеки)
+        class InlineKeyboardButton:
+            def __init__(self, text, callback_data=None, url=None,
+                         switch_inline_query_current_chat=None):
+                self.text = text
+                self.callback_data = callback_data
+                self.url = url
+                self.switch_inline_query_current_chat = switch_inline_query_current_chat
+
+        class InlineKeyboardMarkup:
+            def __init__(self, inline_keyboard=None):
+                self.inline_keyboard = inline_keyboard or []
 
         kb_rows = []
         for row in buttons:
@@ -776,8 +787,11 @@ class _FakeInlineResult:
             # Уже готовые Telethon кнопки — возвращаем как есть
             if isinstance(buttons, list):
                 return buttons
-            from aiogram.types import InlineKeyboardMarkup as AioMarkup
             from telethon.tl.custom import Button as TgButton
+            # Stub InlineKeyboardMarkup — структура совпадает с aiogram
+            class AioMarkup:
+                def __init__(self, inline_keyboard=None):
+                    self.inline_keyboard = inline_keyboard or []
             if isinstance(buttons, AioMarkup):
                 result = []
                 for row in buttons.inline_keyboard:

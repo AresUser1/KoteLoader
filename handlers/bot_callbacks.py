@@ -109,7 +109,12 @@ class _HtmlCallProxy:
                 _logger.warning(f"[compat] HtmlCallProxy.respond fallback failed: {_e2}")
 
     # ── Всплывающее уведомление ──────────────────────────────────────────
-    async def answer(self, text="", show_alert=False, **kwargs):
+    async def answer(self, text="", show_alert=False, alert=None, **kwargs):
+        # Принимаем оба варианта: show_alert (наш стиль) и alert (Telethon/aiogram стиль)
+        if alert is not None:
+            show_alert = alert
+        import logging as _alog
+        _alog.getLogger("bot_callbacks").info(f"[answer] text={text!r} show_alert={show_alert} is_inline={type(getattr(self._event, 'original_update', None)).__name__!r}")
         import logging as _log2
         _logger2 = _log2.getLogger("compat.loader")
         raw = getattr(self._event, "original_update", None)
@@ -120,17 +125,19 @@ class _HtmlCallProxy:
             try:
                 from telethon import functions as _tl_f2
                 query_id = getattr(raw, "query_id", None)
+                _logger2.info(f"[compat] call.answer inline: query_id={query_id!r} text={text!r} alert={show_alert}")
                 if query_id is not None:
-                    await self._event.client(
+                    result = await self._event.client(
                         _tl_f2.messages.SetBotCallbackAnswerRequest(
                             query_id=query_id,
+                            cache_time=0,
                             message=str(text) if text else None,
                             alert=show_alert,
                         )
                     )
-                    _logger2.info(f"[compat] call.answer (inline): OK text={text!r}")
+                    _logger2.info(f"[compat] call.answer (inline): OK result={result!r}")
             except Exception as _ae:
-                _logger2.debug(f"[compat] call.answer (inline) failed: {_ae}")
+                _logger2.error(f"[compat] call.answer (inline) FAILED: {_ae}", exc_info=True)
             return
         try:
             await self._event.answer(text, alert=show_alert)
@@ -150,10 +157,10 @@ class _HtmlCallProxy:
         v = getattr(self._event, "inline_message_id", None)
         if v is not None:
             return v
-        # UpdateInlineBotCallbackQuery хранит id в original_update.msg_id
-        raw = getattr(self._event, "original_update", None)
-        if raw is not None:
-            msg_id = getattr(raw, "msg_id", None)
+        # UpdateInlineBotCallbackQuery хранит msg_id в event.query.msg_id
+        query = getattr(self._event, "query", None)
+        if query is not None:
+            msg_id = getattr(query, "msg_id", None)
             if msg_id is not None:
                 return msg_id
         return None
@@ -567,6 +574,12 @@ async def callback_query_handler(event: events.CallbackQuery):
     """
     Динамически обрабатывает нажатия на инлайн-кнопки.
     """
+    import logging as _cblog
+    _cblog.getLogger("bot_callbacks").info(
+        f"[callback] data={getattr(event, 'data', b'').decode('utf-8', errors='replace')!r} "
+        f"sender={getattr(event, 'sender_id', None)} "
+        f"update_type={type(getattr(event, 'original_update', event)).__name__}"
+    )
     try:
         data = event.data.decode()
     except:
@@ -664,7 +677,12 @@ async def callback_query_handler(event: events.CallbackQuery):
                 event.pattern_match = match
                 # Hikka-совместимые хэндлеры ожидают call.data как bytes
                 # и hikka-стиль call.edit/answer — передаём через proxy
-                await handler_func(_HtmlCallProxy(event))
+                import logging as _mlog
+                _mlog.getLogger("bot_callbacks").info(f"[callback] matched pattern={pattern.pattern!r} handler={handler_func.__name__!r}")
+                try:
+                    await handler_func(_HtmlCallProxy(event))
+                except Exception as _hex:
+                    _mlog.getLogger("bot_callbacks").error(f"[callback] EXCEPTION in {handler_func.__name__!r}: {_hex}", exc_info=True)
                 return
 
         # Роутинг callback'ов от Heroku/Hikka-совместимых модулей (compat)
