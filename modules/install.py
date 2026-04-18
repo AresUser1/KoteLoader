@@ -128,7 +128,23 @@ STD_LIB = {
     "logging", "traceback", "inspect", "importlib", "subprocess", "base64", 
     "hashlib", "io", "copy", "platform", "socket", "ssl", "urllib", "uuid",
     "ast", "pickle", "sqlite3", "html", "http", "email", "calendar", "zipfile",
-    "gzip", "tarfile", "csv", "xml", "unittest", "tempfile", "weakref", "abc"
+    "gzip", "tarfile", "csv", "xml", "unittest", "tempfile", "weakref", "abc",
+    # Модули стандартной библиотеки, которые могут быть удалены в Python 3.13+
+    # или иметь __spec__ == None (что вызывает ValueError в find_spec)
+    "imghdr", "sndhdr", "aifc", "audioop", "cgi", "cgitb", "chunk", "crypt",
+    "imaplib", "mailbox", "msilib", "nis", "nntplib", "ossaudiodev",
+    "pipes", "pty", "readline", "resource", "spwd", "sunau", "telnetlib",
+    "uu", "xdrlib", "contextlib", "dataclasses", "enum", "string", "struct",
+    "binascii", "codecs", "unicodedata", "textwrap", "pprint", "reprlib",
+    "numbers", "decimal", "fractions", "statistics", "cmath", "array",
+    "queue", "heapq", "bisect", "types", "operator", "threading", "multiprocessing",
+    "concurrent", "contextvars", "signal", "mmap", "ctypes", "gc", "builtins",
+    "warnings", "contextlib", "atexit", "linecache", "tokenize", "keyword",
+    "token", "symtable", "compileall", "dis", "marshal", "site", "code",
+    "pdb", "profile", "timeit", "trace", "ftplib", "poplib", "smtplib",
+    "imaplib", "xmlrpc", "ipaddress", "secrets", "hmac", "difflib", "fnmatch",
+    "glob", "stat", "filecmp", "fileinput", "getpass", "getopt", "argparse",
+    "configparser", "netrc", "plistlib", "cryptography"
 }
 
 def _find_module_path(user_input: str) -> Path | None:
@@ -192,7 +208,13 @@ async def install_requirements(event, code_content: str):
     
     for pkg in needed_packages:
         # 1. Проверяем, установлен ли модуль
-        if importlib.util.find_spec(pkg) is not None:
+        # find_spec может кинуть ValueError если __spec__ is None
+        # (например, для удалённых модулей вроде imghdr в Python 3.13+)
+        try:
+            spec = importlib.util.find_spec(pkg)
+        except (ValueError, ModuleNotFoundError):
+            spec = None
+        if spec is not None:
             continue
         
         # 2. Ищем имя пакета в маппинге

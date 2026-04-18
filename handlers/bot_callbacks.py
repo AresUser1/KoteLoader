@@ -56,31 +56,54 @@ class _HtmlCallProxy:
         # Inline callback (via @bot inline) — нужен EditInlineBotMessageRequest
         if iid:
             try:
-                from telethon import functions as _tl_f, types as _tl_t
+                from telethon import functions as _tl_f
                 from telethon.tl.types import InputBotInlineMessageID, InputBotInlineMessageID64
-                from telethon.extensions import html as _tl_html
 
-                # Парсим inline_message_id (base64-строка → TL объект)
-                import base64, struct
-                raw = base64.urlsafe_b64decode(iid + "==")
-                if len(raw) == 20:
-                    dc_id, msg_id, access_hash = struct.unpack("<iiq", raw)
-                    tl_iid = InputBotInlineMessageID(dc_id=dc_id, id=msg_id, access_hash=access_hash)
-                elif len(raw) == 24:
-                    dc_id, msg_id, owner_id, access_hash = struct.unpack("<iiiq", raw)
-                    tl_iid = InputBotInlineMessageID64(dc_id=dc_id, id=msg_id, owner_id=owner_id, access_hash=access_hash)
-                else:
-                    tl_iid = iid  # не удалось распарсить — пробуем как есть
+                # iid — уже готовый TL объект из event.query.msg_id (Telethon ставит его напрямую)
+                # base64 декодирование НЕ нужно
+                tl_iid = iid
 
-                msg_text, entities = _tl_html.parse(text)
-
+                # Конвертируем reply_markup из Hikka формата в Telethon кнопки
                 tl_markup = None
-                if buttons:
+                if reply_markup is not None:
                     try:
-                        tl_markup = self._event.client.build_reply_markup(buttons)
-                    except Exception:
-                        pass
+                        from compat.loader import _InlineManager as _IM
+                        _im = _IM(None)
+                        tl_buttons = _im._generate_telethon_markup(reply_markup)
+                        tl_markup = self._event.client.build_reply_markup(tl_buttons)
+                    except Exception as _me:
+                        _logger.warning(f"[compat] HtmlCallProxy.edit markup convert failed: {_me}")
 
+                # Парсим текст с поддержкой premium emoji
+                try:
+                    from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+                    if _has_emoji_tags(text):
+                        msg_text, entities = _parse_emoji_html(text)
+                        # Если парсинг emoji вернул пустой текст — fallback на strip-версию
+                        if not msg_text or not msg_text.strip():
+                            _logger.warning("[compat] _parse_emoji_html вернул пустой текст, fallback на HTML без emoji")
+                            from telethon.extensions import html as _tl_html
+                            _clean = _parse_emoji_html.__globals__["_EMOJI_TAG_RE"].sub(lambda m: m.group(2), text)
+                            msg_text, entities = _tl_html.parse(_clean)
+                    else:
+                        from telethon.extensions import html as _tl_html
+                        msg_text, entities = _tl_html.parse(text)
+                except Exception as _pe:
+                    _logger.warning(f"[compat] parse failed: {_pe}, fallback to strip")
+                    try:
+                        from telethon.extensions import html as _tl_html
+                        msg_text, entities = _tl_html.parse(text)
+                    except Exception:
+                        msg_text = text
+                        entities = []
+
+                # Telegram не принимает пустой текст — ставим неразрывный пробел
+                if not msg_text or not msg_text.strip():
+                    _logger.warning(f"[compat] HtmlCallProxy.edit: пустой msg_text после парсинга, text={text[:80]!r}")
+                    msg_text = " "  # неразрывный пробел — Telegram принимает в inline edit
+                    entities = []
+
+                _logger.info(f"[compat] HtmlCallProxy.edit (inline): msg_text_len={len(msg_text)} entities={len(entities)}")
                 await self._event.client(_tl_f.messages.EditInlineBotMessageRequest(
                     id=tl_iid,
                     message=msg_text,
@@ -88,14 +111,32 @@ class _HtmlCallProxy:
                     reply_markup=tl_markup,
                     no_webpage=not link_preview,
                 ))
-                _logger.info("[compat] HtmlCallProxy.edit (inline): EditInlineBotMessageRequest OK")
+                _logger.info("[compat] HtmlCallProxy.edit (inline): OK")
                 return
             except Exception as _e_inline:
                 _logger.warning(f"[compat] HtmlCallProxy.edit (inline) failed: {_e_inline}")
-                return  # inline-сообщения нельзя редактировать иначе
+                import traceback as _tbi
+                _logger.debug(_tbi.format_exc())
+                return
 
-        # Обычный callback — используем стандартный event.edit()
+        # Обычный callback — используем стандартный event.edit() через userbot
         try:
+            from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+            _has_emj = isinstance(text, str) and _has_emoji_tags(text)
+        except Exception:
+            _has_emj = False
+
+        try:
+            if _has_emj:
+                # Premium emoji — парсим и передаём formatting_entities (userbot с премиумом)
+                _ep_text, _ep_ents = _parse_emoji_html(text)
+                if _ep_text and _ep_text.strip():
+                    await self._event.edit(
+                        _ep_text, formatting_entities=_ep_ents,
+                        buttons=buttons, link_preview=False,
+                    )
+                    _logger.info("[compat] HtmlCallProxy.edit (emoji): OK")
+                    return
             await self._event.edit(
                 text, buttons=buttons,
                 parse_mode="html", link_preview=False,
@@ -137,7 +178,12 @@ class _HtmlCallProxy:
                     )
                     _logger2.info(f"[compat] call.answer (inline): OK result={result!r}")
             except Exception as _ae:
-                _logger2.error(f"[compat] call.answer (inline) FAILED: {_ae}", exc_info=True)
+                _err_str = str(_ae)
+                _err_name = type(_ae).__name__
+                if "QueryIdInvalid" in _err_name or "QUERY_ID_INVALID" in _err_str:
+                    _logger2.warning(f"[compat] call.answer (inline) query expired (>15s), ignoring: {_ae}")
+                else:
+                    _logger2.error(f"[compat] call.answer (inline) FAILED: {_ae}", exc_info=True)
             return
         try:
             await self._event.answer(text, alert=show_alert)
@@ -157,7 +203,14 @@ class _HtmlCallProxy:
         v = getattr(self._event, "inline_message_id", None)
         if v is not None:
             return v
-        # UpdateInlineBotCallbackQuery хранит msg_id в event.query.msg_id
+        # UpdateInlineBotCallbackQuery: msg_id лежит прямо на original_update,
+        # а НЕ в event.query — Telethon не проксирует его как inline_message_id
+        raw = getattr(self._event, "original_update", None)
+        if raw is not None and type(raw).__name__ == "UpdateInlineBotCallbackQuery":
+            msg_id = getattr(raw, "msg_id", None)
+            if msg_id is not None:
+                return msg_id
+        # Fallback: старый путь через event.query.msg_id
         query = getattr(self._event, "query", None)
         if query is not None:
             msg_id = getattr(query, "msg_id", None)
@@ -175,13 +228,16 @@ class _HtmlCallProxy:
     def from_user(self):
         return _FromUserProxy(self._event)
 
-    # ── call.data — всегда bytes (Hikka-модули ожидают bytes) ──────────
+    # ── call.data — строка, как в оригинальном Hikka/Heroku ──────────────
+    # HikariChat и другие Hikka-модули ожидают call.data как str:
+    #   re.match(r"pattern", call.data)  и  call.data.split("/")
+    # Telethon event.data — bytes, декодируем здесь один раз.
     @property
     def data(self):
         d = getattr(self._event, "data", b"")
-        if isinstance(d, str):
-            return d.encode("utf-8")
-        return d if d is not None else b""
+        if isinstance(d, bytes):
+            return d.decode("utf-8", errors="replace")
+        return d if d is not None else ""
 
     # ── Удаление сообщения (call.delete()) ─────────────────────────────
     async def delete(self):
@@ -596,6 +652,22 @@ async def callback_query_handler(event: events.CallbackQuery):
     user_client = event.client.user_client
 
     try:
+        # Системные кнопки Hikka/Heroku
+        if data in ("noop", ""):
+            await event.answer()
+            return
+
+        if data == "close":
+            await event.answer()
+            try:
+                await event.delete()
+            except Exception:
+                try:
+                    await event.edit("✅ Closed.", buttons=None)
+                except Exception:
+                    pass
+            return
+
         if data == "close_panel":
             await event.answer("Закрыто.")
             await event.edit("Панель закрыта.", buttons=None)
@@ -660,32 +732,8 @@ async def callback_query_handler(event: events.CallbackQuery):
                     await event.answer(f"ℹ️ Модуль {module_name} уже был удален.", alert=True)
                 return
 
-        for pattern, handler_func in CALLBACK_REGISTRY.items():
-            # Hikka/Heroku модули могут регистрировать bytes-паттерны и ожидать event.data как bytes.
-            # Пробуем матчить сначала по str (data), затем по bytes (event.data).
-            _pat_str = getattr(pattern, "pattern", None)
-            _match_bytes = isinstance(_pat_str, bytes)
-            _match_target = event.data if _match_bytes else data
-            match = pattern.match(_match_target)
-            if not match and not _match_bytes:
-                # Fallback: попробовать по bytes на случай если паттерн всё же bytes
-                try:
-                    match = pattern.match(event.data)
-                except TypeError:
-                    pass
-            if match:
-                event.pattern_match = match
-                # Hikka-совместимые хэндлеры ожидают call.data как bytes
-                # и hikka-стиль call.edit/answer — передаём через proxy
-                import logging as _mlog
-                _mlog.getLogger("bot_callbacks").info(f"[callback] matched pattern={pattern.pattern!r} handler={handler_func.__name__!r}")
-                try:
-                    await handler_func(_HtmlCallProxy(event))
-                except Exception as _hex:
-                    _mlog.getLogger("bot_callbacks").error(f"[callback] EXCEPTION in {handler_func.__name__!r}: {_hex}", exc_info=True)
-                return
-
-        # Роутинг callback'ов от Heroku/Hikka-совместимых модулей (compat)
+        # ── Приоритет 1: точные ключи из _CallbackRegistry (hc_N — кнопки inline.form) ──
+        # Проверяем ДО CALLBACK_REGISTRY чтобы паттерн .* из других модулей не перехватил.
         from compat.loader import _CallbackRegistry
         compat_entry = _CallbackRegistry.get(data)
         if compat_entry:
@@ -721,6 +769,43 @@ async def callback_query_handler(event: events.CallbackQuery):
                 _cel.getLogger("bot_callbacks").error(f"[compat_cb_call] EXCEPTION in {getattr(func, '__name__', func)!r}: {_ce}")
                 traceback.print_exc()
             return
+
+        # ── Приоритет 2: паттерн-матчинг из CALLBACK_REGISTRY ────────────────
+        # Сортируем: специфичные паттерны (не ".*") идут раньше универсальных.
+        _cb_specific = []
+        _cb_wildcard = []
+        for _pat, _hf in CALLBACK_REGISTRY.items():
+            _ps = getattr(_pat, "pattern", "")
+            if _ps in (".*", ".+", ""):
+                _cb_wildcard.append((_pat, _hf))
+            else:
+                _cb_specific.append((_pat, _hf))
+
+        for pattern, handler_func in (_cb_specific + _cb_wildcard):
+            _pat_str = getattr(pattern, "pattern", None)
+            _match_bytes = isinstance(_pat_str, bytes)
+            _match_target = event.data if _match_bytes else data
+            match = pattern.match(_match_target)
+            if not match and not _match_bytes:
+                try:
+                    match = pattern.match(event.data)
+                except TypeError:
+                    pass
+            if match:
+                event.pattern_match = match
+                _is_public_handler = getattr(handler_func, "_is_inline_everyone", False) or                                      getattr(handler_func, "_is_unrestricted", False)
+                if not _is_public_handler:
+                    _sender = getattr(event, "sender_id", None)
+                    if _sender and db.get_user_level(_sender) not in ["OWNER", "TRUSTED"]:
+                        await event.answer("🚫 Доступ запрещён.", alert=True)
+                        return
+                import logging as _mlog
+                _mlog.getLogger("bot_callbacks").info(f"[callback] matched pattern={_pat_str!r} handler={handler_func.__name__!r}")
+                try:
+                    await handler_func(_HtmlCallProxy(event))
+                except Exception as _hex:
+                    _mlog.getLogger("bot_callbacks").error(f"[callback] EXCEPTION in {handler_func.__name__!r}: {_hex}", exc_info=True)
+                return
 
         text, buttons = None, None
 

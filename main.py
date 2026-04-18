@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import os
+import sys
 import uuid
 import random
 from configparser import ConfigParser
@@ -15,6 +16,61 @@ LOG_FILE = "kote_loader.log"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                     handlers=[logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8'), logging.StreamHandler()])
 logging.getLogger('telethon').setLevel(logging.WARNING)
+
+# ── Защита от двойного запуска (database is locked) ─────────────────────────
+_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".koteloader.lock")
+
+def _is_pid_alive(pid: int) -> bool:
+    """Проверяет жив ли процесс с данным PID через /proc (надёжно на Android/Termux)."""
+    # Проверяем через /proc — работает везде на Linux/Android
+    try:
+        return os.path.exists(f"/proc/{pid}")
+    except Exception:
+        pass
+    # Fallback: сигнал 0
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+def _acquire_lock():
+    # Если lock-файл существует — проверяем жив ли тот процесс
+    if os.path.exists(_LOCK_FILE):
+        try:
+            with open(_LOCK_FILE, "r") as f:
+                old_pid = int(f.read().strip())
+            if old_pid != os.getpid() and _is_pid_alive(old_pid):
+                print(f"❌ KoteLoader уже запущен (PID {old_pid})! Закройте предыдущий процесс.")
+                sys.exit(1)
+        except (ValueError, OSError):
+            pass
+        # Процесс мёртв или файл повреждён — перезаписываем
+        try:
+            os.unlink(_LOCK_FILE)
+        except OSError:
+            pass
+    # Записываем свой PID
+    try:
+        with open(_LOCK_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass  # Не критично если не удалось записать
+
+def _release_lock():
+    try:
+        if os.path.exists(_LOCK_FILE):
+            with open(_LOCK_FILE, "r") as f:
+                pid = int(f.read().strip())
+            if pid == os.getpid():
+                os.unlink(_LOCK_FILE)
+    except Exception:
+        pass
+
+import atexit as _atexit
+_acquire_lock()
+_atexit.register(_release_lock)
+# ────────────────────────────────────────────────────────────────────────────
 
 try:
     from handlers.bot_callbacks import inline_query_handler, callback_query_handler
@@ -390,6 +446,10 @@ async def start_clients():
     me = await user_client.get_me()
     name = f"{me.first_name or ''} {me.last_name or ''}".strip() or me.username or str(me.id)
     ok(f"Вошёл как  {W}{name}{RST}  {DIM}(id: {me.id}){RST}")
+
+    # Сохраняем tg_id прямо на клиенте — Hikka-модули обращаются к client._tg_id
+    user_client._tg_id = me.id
+    user_client.tg_id = me.id
 
     await ensure_folder_added(user_client)
 

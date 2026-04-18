@@ -15,6 +15,7 @@
 import sys
 import types
 import logging
+import asyncio
 import importlib
 import importlib.util
 import inspect
@@ -120,6 +121,27 @@ def _patch_herokutl():
 
     logger.debug("[compat] herokutl → telethon aliased")
 
+    # ── Патч get_entity: убираем неизвестный kwarg 'exp' ─────────────────
+    # Hikka/Heroku модули (HikariChat и др.) вызывают:
+    #   await self._client.get_entity(chat, exp=0)
+    # Стандартный Telethon не принимает аргумент 'exp' → TypeError.
+    # Патчим на уровне класса один раз.
+    try:
+        from telethon import TelegramClient as _TGC
+        if not getattr(_TGC, "_get_entity_exp_patched", False):
+            _orig_get_entity = _TGC.get_entity
+
+            async def _get_entity_patched(self, entity, exp=None, **kwargs):
+                # 'exp' — параметр cache-expiry из hikkatl/herokutl форков,
+                # в стандартном Telethon его нет — просто игнорируем.
+                return await _orig_get_entity(self, entity, **kwargs)
+
+            _TGC.get_entity = _get_entity_patched
+            _TGC._get_entity_exp_patched = True
+            logger.debug("[compat] get_entity patched: 'exp' kwarg will be ignored")
+    except Exception as _ge_err:
+        logger.warning(f"[compat] get_entity patch failed (non-critical): {_ge_err}")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Шаг 2: Создаём фейковый пакет чтобы from .. import loader, utils работало
@@ -191,15 +213,117 @@ def _create_fake_package(package_name: str):
     sys.modules[f"{package_name}.types"] = types_mod
     pkg.types = types_mod
 
-    # from ..inline.types import InlineCall  (Gemini)
+    # from ..inline.types import InlineCall, InlineMessage
     inline_mod = types.ModuleType(f"{package_name}.inline")
     inline_types_mod = types.ModuleType(f"{package_name}.inline.types")
+
     class InlineCall:
-        def __init__(self): self.message_id = None; self.chat_id = None
-        async def answer(self, text="", **kw): pass
-        async def delete(self): pass
-        async def edit(self, text, **kw): pass
+        """
+        Hikka InlineCall — объект передаваемый в @loader.callback_handler обработчики.
+        Методы делегируют реальные Telegram-операции через сохранённый event.
+        Реальный event устанавливается через InlineCall._bind(event) после создания.
+        """
+        def __init__(self):
+            self.message_id = None
+            self.chat_id = None
+            self._event = None  # устанавливается в bot_callbacks при вызове
+
+        @classmethod
+        def _bind(cls, event):
+            """Создаёт InlineCall привязанный к реальному Telethon event."""
+            obj = cls()
+            obj._event = event
+            obj.message_id = getattr(event, "message_id", None)
+            obj.chat_id = getattr(event, "chat_id", None)
+            return obj
+
+        @property
+        def data(self):
+            d = getattr(self._event, "data", b"") if self._event else b""
+            return d.encode() if isinstance(d, str) else (d or b"")
+
+        @property
+        def from_user(self):
+            if self._event is None:
+                return None
+            class _FU:
+                def __init__(self, ev):
+                    self.id = getattr(ev, "sender_id", None)
+            return _FU(self._event)
+
+        async def answer(self, text="", show_alert=False, alert=None, **kw):
+            if alert is not None:
+                show_alert = alert
+            if self._event is None:
+                return
+            try:
+                from handlers.bot_callbacks import _HtmlCallProxy
+                await _HtmlCallProxy(self._event).answer(text, show_alert=show_alert)
+            except Exception as _e:
+                import logging; logging.getLogger(__name__).warning(f"InlineCall.answer: {_e}")
+
+        async def delete(self):
+            if self._event is None:
+                return
+            try:
+                from handlers.bot_callbacks import _HtmlCallProxy
+                await _HtmlCallProxy(self._event).delete()
+            except Exception as _e:
+                import logging; logging.getLogger(__name__).warning(f"InlineCall.delete: {_e}")
+
+        async def edit(self, text, reply_markup=None, parse_mode="html", **kw):
+            if self._event is None:
+                return
+            try:
+                from handlers.bot_callbacks import _HtmlCallProxy
+                await _HtmlCallProxy(self._event).edit(text, reply_markup=reply_markup,
+                                                       parse_mode=parse_mode, **kw)
+            except Exception as _e:
+                import logging; logging.getLogger(__name__).warning(f"InlineCall.edit: {_e}")
+
+    class InlineMessage:
+        """
+        Hikka InlineMessage — объект для редактирования inline-сообщений отправленных ботом.
+        Создаётся когда бот отправил сообщение через inline-режим и нужно его изменить.
+        """
+        def __init__(self):
+            self.message_id = None
+            self.chat_id = None
+            self._client = None
+            self._bot = None
+
+        @classmethod
+        def _bind(cls, client, bot, chat_id, message_id):
+            obj = cls()
+            obj._client = client
+            obj._bot = bot
+            obj.chat_id = chat_id
+            obj.message_id = message_id
+            return obj
+
+        async def delete(self):
+            if self._bot and self.chat_id and self.message_id:
+                try:
+                    await self._bot.delete_messages(self.chat_id, [self.message_id])
+                except Exception as _e:
+                    import logging; logging.getLogger(__name__).warning(f"InlineMessage.delete: {_e}")
+
+        async def edit(self, text, reply_markup=None, parse_mode="html", **kw):
+            if self._bot and self.chat_id and self.message_id:
+                try:
+                    from compat.loader import _BotStub
+                    bs = _BotStub(self._client, bot_client=self._bot)
+                    await bs.edit_message_text(
+                        chat_id=self.chat_id,
+                        message_id=self.message_id,
+                        text=text,
+                        reply_markup=reply_markup,
+                        parse_mode=parse_mode,
+                    )
+                except Exception as _e:
+                    import logging; logging.getLogger(__name__).warning(f"InlineMessage.edit: {_e}")
     inline_types_mod.InlineCall = InlineCall
+    inline_types_mod.InlineMessage = InlineMessage
     inline_mod.types = inline_types_mod
     sys.modules[f"{package_name}.inline"] = inline_mod
     sys.modules[f"{package_name}.inline.types"] = inline_types_mod
@@ -489,6 +613,144 @@ def _patch_client_html(client):
     client.edit_message = _smart_edit
 
 
+async def _install_module_requires(file_path) -> list:
+    """
+    Читает заголовок файла модуля (первые 60 строк), парсит строки вида:
+      # requires: aiohttp websockets requests>=2.0
+      # requires: git+https://github.com/user/repo
+
+    Для каждого пакета:
+      - Для git+https:// URL — определяет import-имя из egg= или имени репозитория.
+      - Проверяет importlib.util.find_spec() — если уже установлен, пропускает.
+      - Если нет — устанавливает через `pip install --quiet` в фоне.
+
+    Возвращает список установленных пакетов.
+    """
+    import importlib.util
+    import asyncio
+    import re as _re
+
+    # Маппинг: pip-имя (lowercase) -> import-имя для проверки наличия
+    _PIP_TO_IMPORT = {
+        "pillow": "PIL",
+        "pycryptodome": "Crypto",
+        "pycryptodomex": "Cryptodome",
+        "python-dateutil": "dateutil",
+        "python-telegram-bot": "telegram",
+        "beautifulsoup4": "bs4",
+        "scikit-learn": "sklearn",
+        "opencv-python": "cv2",
+        "opencv-python-headless": "cv2",
+        "pytz": "pytz",
+        "attrs": "attr",
+        "typing-extensions": "typing_extensions",
+        # git-пакеты по имени репо → import-имя
+        "yandex-music-api": "yandex_music",
+        "yandex_music": "yandex_music",
+    }
+
+    # Маппинг известных git-репо → import-имя
+    # ключ: часть URL (lowercase repo name или egg= значение)
+    _GIT_REPO_TO_IMPORT = {
+        "yandex-music-api": "yandex_music",
+        "yandex_music": "yandex_music",
+        "telethon": "telethon",
+        "pyrogram": "pyrogram",
+    }
+
+    def _get_import_name_for_git(pkg_spec: str) -> str:
+        """
+        Для git+https://github.com/user/repo[@branch][#egg=name]
+        определяет import-имя:
+          1. egg=name в URL → _PIP_TO_IMPORT.get(name) or name.replace("-","_")
+          2. последний сегмент URL (имя репо) → _GIT_REPO_TO_IMPORT.get(repo)
+          3. fallback: имя репо без суффикса .git → заменяем - на _
+        """
+        # Извлекаем egg= если есть: git+https://...#egg=yandex-music
+        egg_m = _re.search(r"#egg=([A-Za-z0-9_\-]+)", pkg_spec)
+        if egg_m:
+            egg_name = egg_m.group(1).lower()
+            return _PIP_TO_IMPORT.get(egg_name, egg_name.replace("-", "_"))
+
+        # Берём имя репо из URL: последний сегмент пути до @ или #
+        # git+https://github.com/MarshalX/yandex-music-api → yandex-music-api
+        url_path = _re.split(r"[@#]", pkg_spec.rstrip("/"))[0]
+        repo_name = url_path.rstrip("/").rsplit("/", 1)[-1]
+        # Убираем .git если есть
+        repo_name = _re.sub(r"\.git$", "", repo_name, flags=_re.IGNORECASE)
+        repo_lower = repo_name.lower()
+
+        return _GIT_REPO_TO_IMPORT.get(repo_lower, repo_lower.replace("-", "_"))
+
+    # Читаем заголовок
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            header = [next(f, "") for _ in range(60)]
+    except Exception:
+        return []
+
+    # Парсим все строки # requires:
+    packages = []
+    for line in header:
+        m = _re.match(r"^\s*#\s*requires?\s*:\s*(.+)", line, _re.IGNORECASE)
+        if m:
+            pkgs = m.group(1).strip().split()
+            packages.extend(pkgs)
+
+    if not packages:
+        return []
+
+    installed = []
+    for pkg_spec in packages:
+        # ── git+https:// обрабатываем отдельно ──────────────────────────
+        if pkg_spec.startswith("git+"):
+            import_name = _get_import_name_for_git(pkg_spec)
+            pip_spec = pkg_spec  # полный URL передаём в pip как есть
+            display_name = import_name
+        else:
+            # Обычный пакет: aiohttp>=3.0 → pip_spec=aiohttp>=3.0, name=aiohttp
+            pip_spec = pkg_spec
+            pkg_name = _re.split(r"[><=!;]", pkg_spec)[0].strip()
+            pkg_lower = pkg_name.lower()
+            import_name = _PIP_TO_IMPORT.get(pkg_lower, pkg_lower.replace("-", "_"))
+            display_name = pkg_name
+
+        # Проверяем наличие
+        try:
+            if importlib.util.find_spec(import_name) is not None:
+                logger.debug(f"[requires] {display_name} уже установлен, пропускаем")
+                continue
+        except (ModuleNotFoundError, ValueError):
+            # find_spec бросает ModuleNotFoundError если имя содержит недопустимые символы
+            # (например, если import_name каким-то образом содержит "/" или "+")
+            # В таком случае просто пробуем установить
+            logger.warning(f"[requires] find_spec({import_name!r}) failed, попробуем установить")
+
+        # Устанавливаем
+        logger.info(f"[requires] Устанавливаем {display_name} ({pip_spec})...")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pip", "install", "--quiet", "--no-input", pip_spec,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            if proc.returncode == 0:
+                logger.info(f"[requires] ✅ {display_name} успешно установлен")
+                installed.append(display_name)
+                importlib.invalidate_caches()
+            else:
+                err_text = stderr.decode(errors="replace").strip()
+                logger.warning(f"[requires] ❌ Не удалось установить {pip_spec}: {err_text}")
+        except asyncio.TimeoutError:
+            logger.warning(f"[requires] ⏱ Таймаут установки {pip_spec}")
+        except FileNotFoundError:
+            logger.warning(f"[requires] pip не найден, пропускаем {pip_spec}")
+        except Exception as e:
+            logger.warning(f"[requires] Ошибка установки {pip_spec}: {e}")
+
+    return installed
+
 async def load_heroku_module(client, file_path: str | Path, chat_id: int = None) -> dict:
     """
     Загружает Heroku/Hikka-совместимый модуль.
@@ -511,10 +773,54 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
     # 1. Патчим herokutl
     _patch_herokutl()
 
-    # 2. Создаём фейковый пакет для from .. import loader, utils
+    # 1.5. Устанавливаем compatibility shims ДО загрузки модуля
+    #
+    # aiogram shim: чужие модули делают
+    #   from aiogram.utils.exceptions import MessageCantBeDeleted   ← aiogram 2 API
+    # на машинах с aiogram 3.x или вообще без aiogram (Termux).
+    try:
+        from compat.aiogram_shim import install_aiogram_shim
+        install_aiogram_shim()
+    except Exception as _shim_err:
+        logger.warning(f"[compat] aiogram_shim install failed (non-critical): {_shim_err}")
+
+    # imghdr shim: модуль imghdr убрали из stdlib в Python 3.13.
+    # Чужие модули (HikariChat и др.) делают `import imghdr` — на Python 3.13+ крашится.
+    try:
+        from compat.imghdr_shim import install_imghdr_shim
+        install_imghdr_shim()
+    except Exception as _shim_err:
+        logger.warning(f"[compat] imghdr_shim install failed (non-critical): {_shim_err}")
+
+    # 2. Парсим и устанавливаем зависимости из заголовка модуля
+    # Поддерживаем форматы:
+    #   # requires: aiohttp websockets requests
+    #   # requires: aiohttp>=3.0 websockets
+    await _install_module_requires(file_path)
+
+    # 2b. Проверяем базовые зависимости которые модули часто используют
+    # без объявления в # requires: (например HikariChat использует websockets молча)
+    _BASE_DEPS = {"websockets": "websockets", "aiohttp": "aiohttp", "requests": "requests"}
+    import importlib.util as _ilu
+    for _imp_name, _pip_name in _BASE_DEPS.items():
+        if _ilu.find_spec(_imp_name) is None:
+            logger.info(f"[compat] auto-installing missing base dep: {_pip_name}")
+            try:
+                import asyncio as _aio_d, sys as _sys_d
+                _dp = await _aio_d.create_subprocess_exec(
+                    _sys_d.executable, "-m", "pip", "install", "-q",
+                    "--disable-pip-version-check", _pip_name,
+                    stdout=_aio_d.subprocess.PIPE, stderr=_aio_d.subprocess.PIPE,
+                )
+                await _dp.wait()
+                import importlib as _il_d; _il_d.invalidate_caches()
+            except Exception as _de:
+                logger.warning(f"[compat] auto-install {_pip_name} failed: {_de}")
+
+    # 3. Создаём фейковый пакет для from .. import loader, utils
     _create_fake_package(FAKE_PACKAGE)
 
-    # 3. Загружаем модуль
+    # 4. Загружаем модуль
     try:
         mod = _load_source_as_package(file_path, FAKE_PACKAGE)
     except Exception as e:
@@ -529,7 +835,11 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
     for name, obj in inspect.getmembers(mod, inspect.isclass):
         if obj is HerokuModule:
             continue
-        if issubclass(obj, HerokuModule) or getattr(obj, "_is_heroku_module", False):
+        try:
+            is_sub = issubclass(obj, HerokuModule)
+        except TypeError:
+            is_sub = False
+        if is_sub or getattr(obj, "_is_heroku_module", False):
             module_instance = obj()
             break
 
@@ -541,7 +851,18 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
     module_instance._client = client   # алиас: Hikka-модули используют self._client
     # Оборачиваем db в адаптер: db.get("Mod","key") → db_module.get_module_data("Mod","key")
     module_instance.db = _DbAdapter(db_module)
-    module_instance._tg_id = (await client.get_me()).id
+
+    # _tg_id ставим на клиент ДО client_ready — HikariChatAPI._queue_processor
+    # стартует внутри client_ready через asyncio.ensure_future и сразу читает client._tg_id
+    _me_id = getattr(client, "_tg_id", None)
+    if not _me_id:
+        try:
+            _me_id = (await client.get_me()).id
+        except Exception:
+            _me_id = 0
+    client._tg_id = _me_id
+    client.tg_id  = _me_id
+    module_instance._tg_id = _me_id
 
     # inline manager — bot_username берём из bot_client (бот), а НЕ из client (юзербот)
     bot_client = getattr(client, "bot_client", None)
@@ -713,7 +1034,7 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
 
     # Загружаем конфиг из БД
     mod_name = module_instance._get_module_name()
-    if isinstance(module_instance.config, ModuleConfig):
+    if hasattr(module_instance, "config") and isinstance(module_instance.config, ModuleConfig):
         for key, cv in module_instance.config._meta.items():
             saved = db_module.get_module_config(mod_name, key)
             if saved is not None:
@@ -734,6 +1055,247 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
         import traceback
         logger.warning(f"[compat] client_ready failed for {mod_name}: {e}\n{traceback.format_exc()}")
         print(f"[compat] client_ready error in {mod_name}: {e}")
+
+    # 6b. Патчим HikariChatAPI.request() для работы в local-режиме без задержек.
+    # В local-режиме request() кладёт данные в очередь, а _queue_processor
+    # обрабатывает их через asyncio.sleep(1). Из-за этого .newfed создаёт
+    # федерацию только через секунду — если сразу написать .fadd, fed не найден.
+    # Патч применяет изменения к _feds/_chats немедленно, минуя очередь.
+    try:
+        _api = getattr(module_instance, "api", None)
+        if _api is not None and not hasattr(_api, "_request_patched"):
+            import random as _rnd, types as _types
+
+            def _patched_request(self, payload: dict, message=None):
+                # Добавляем в очередь как обычно
+                try:
+                    if message is not None:
+                        try:
+                            from utils import tools as _tools
+                            import utils as _u
+                            chat_id = _u.get_chat_id(message)
+                        except Exception:
+                            # fallback: peer_id у Telethon Message
+                            peer = getattr(message, "peer_id", None)
+                            if peer is not None:
+                                chat_id = getattr(peer, "channel_id", None) or getattr(peer, "chat_id", None) or getattr(peer, "user_id", None)
+                                if chat_id and hasattr(peer, "channel_id") and peer.channel_id:
+                                    chat_id = -int(str(chat_id).lstrip("-"))
+                            else:
+                                chat_id = getattr(message, "chat_id", None)
+                        if chat_id:
+                            payload = {
+                                **payload,
+                                "chat_id": chat_id,
+                                "message_id": message.id,
+                            }
+                except Exception:
+                    pass
+                # В local-режиме НЕ добавляем в очередь — _queue_processor повторно применит
+                # то же действие и выдаст "API Error: Chat is already in this federation".
+                # В online-режиме добавляем как обычно — сервер обрабатывает через WebSocket.
+                if not getattr(self, "_local", False):
+                    self._queue += [payload]
+
+                action = payload.get("action", "")
+                args = payload.get("args", {})
+                u = str(getattr(getattr(self, "_client", None), "_tg_id", "0") or "0")
+
+                import logging as _hc_log
+                _hcl = _hc_log.getLogger("compat.hikari_debug")
+                _hcl.info(f"[HikariChat] request: action={action!r}, args={args}, owner={u}")
+                _hcl.info(f"[HikariChat] _feds before: { {k: v.get('shortname') for k,v in self._feds.items()} }")
+
+                def _sync_feds():
+                    """Сохраняем в БД. self.feds в local-режиме строится через __getattr__."""
+                    self.module.set("feds", self._feds)
+                    # В local-режиме HikariChatAPI делает delattr(self, "feds") при init,
+                    # после чего self.feds работает через __getattr__ и каждый раз строится
+                    # из self._feds "на лету". Мы НЕ перезаписываем instance attr "feds",
+                    # иначе __getattr__ перестаёт вызываться и find_fed видит устаревший кеш.
+                    # Если всё же instance attr существует (online-режим) — обновляем его.
+                    if "feds" in self.__dict__:
+                        rebuilt = {v["shortname"]: v for v in self._feds.values()}
+                        self.__dict__["feds"] = rebuilt
+                        _hcl.info(f"[HikariChat] feds (instance attr) after sync: { list(rebuilt.keys()) }")
+                    else:
+                        rebuilt = {v["shortname"]: v for v in self._feds.values()}
+                        _hcl.info(f"[HikariChat] feds after sync: { list(rebuilt.keys()) }")
+
+                if action == "create federation":
+                    sn = args.get("shortname", "")
+                    name = args.get("name", "")
+                    if sn and name:
+                        # Проверяем что shortname не занят
+                        if any(v.get("shortname") == sn for v in self._feds.values()):
+                            _hcl.warning(f"[HikariChat] create federation: shortname {sn!r} уже занят")
+                            return
+                        t = "fed_" + "".join(
+                            _rnd.choice("abcdefghijklmnopqrstuvwyz1234567890")
+                            for _ in range(32)
+                        )
+                        self._feds[t] = {
+                            "shortname": sn, "name": name, "chats": [],
+                            "warns": {}, "admins": [u], "owner": u,
+                            "fdef": [], "notes": {}, "uid": t,
+                        }
+                        _hcl.info(f"[HikariChat] created fed uid={t}, shortname={sn!r}, name={name!r}")
+                        _sync_feds()
+
+                elif action == "add chat to federation":
+                    uid = args.get("uid", "")
+                    cid = str(args.get("cid", ""))
+                    _hcl.info(f"[HikariChat] add chat: uid={uid!r}, cid={cid!r}, known_feds={list(self._feds.keys())[:5]}")
+                    if uid in self._feds and cid not in self._feds[uid]["chats"]:
+                        self._feds[uid]["chats"].append(cid)
+                        _hcl.info(f"[HikariChat] chat {cid} added to fed {uid}")
+                        _sync_feds()
+                    elif uid not in self._feds:
+                        _hcl.warning(f"[HikariChat] add chat: uid={uid!r} не найден в _feds!")
+
+                elif action == "remove chat from federation":
+                    uid = args.get("uid", "")
+                    cid = str(args.get("cid", ""))
+                    if uid in self._feds and cid in self._feds[uid]["chats"]:
+                        self._feds[uid]["chats"].remove(cid)
+                        _hcl.info(f"[HikariChat] chat {cid} removed from fed {uid}")
+                        _sync_feds()
+
+                elif action == "delete federation":
+                    uid = args.get("uid", "")
+                    if uid in self._feds:
+                        _hcl.info(f"[HikariChat] deleted fed uid={uid}")
+                        del self._feds[uid]
+                        _sync_feds()
+
+                elif action == "warn user":
+                    uid = args.get("uid", "")
+                    user = str(args.get("user", ""))
+                    reason = args.get("reason", "")
+                    if uid in self._feds:
+                        self._feds[uid].setdefault("warns", {}).setdefault(user, []).append(reason)
+                        _hcl.info(f"[HikariChat] warn user={user} in fed={uid}, reason={reason!r}")
+                        _sync_feds()
+
+                elif action == "clear warns":
+                    uid = args.get("uid", "")
+                    user = str(args.get("user", ""))
+                    if uid in self._feds:
+                        self._feds[uid].get("warns", {}).pop(user, None)
+                        _hcl.info(f"[HikariChat] cleared warns for user={user} in fed={uid}")
+                        _sync_feds()
+
+                elif action == "clear federation warns":
+                    uid = args.get("uid", "")
+                    if uid in self._feds:
+                        self._feds[uid]["warns"] = {}
+                        _hcl.info(f"[HikariChat] cleared all warns in fed={uid}")
+                        _sync_feds()
+
+                elif action == "update protections":
+                    chat_key = str(args.get("chat", ""))
+                    protection = args.get("protection", "")
+                    state = args.get("state", "off")
+                    if chat_key and protection:
+                        # ВАЖНО: НЕ меняем self.chats здесь!
+                        # HikariChat сам делает del/set после вызова request() —
+                        # если мы сделаем pop() первыми, модуль упадёт с KeyError.
+                        # Инициализируем чат если совсем нет записи (новый чат).
+                        if chat_key not in self.chats:
+                            self.chats[chat_key] = {}
+                        _hcl.info(f"[HikariChat] protection {protection}={state} for chat {chat_key} (module will apply)")
+                        # Сохраняем в БД через ensure_future с задержкой 0.3с —
+                        # этого достаточно чтобы HikariChat успел сделать del/set
+                        # внутри своего кода, и мы запишем уже актуальное состояние.
+                        async def _save_chats_delayed(api_ref=self, prot=protection, st=state, ckey=chat_key):
+                            import asyncio as _aio_d2
+                            await _aio_d2.sleep(0.3)
+                            try:
+                                api_ref.module.set("chats", api_ref.chats)
+                                _hcl.info(f"[HikariChat] chats saved to DB after {prot}={st} for {ckey}")
+                                _hcl.info(f"[HikariChat] chat state now: {api_ref.chats.get(ckey, {})}")
+                            except Exception as _sce:
+                                _hcl.warning(f"[HikariChat] chats save failed: {_sce}")
+                        try:
+                            import asyncio as _aio_cs
+                            _aio_cs.ensure_future(_save_chats_delayed())
+                        except Exception:
+                            pass
+
+                elif action == "forgive user warn":
+                    uid = args.get("uid", "")
+                    user = str(args.get("user", ""))
+                    if uid in self._feds and user in self._feds[uid].get("warns", {}):
+                        warns = self._feds[uid]["warns"][user]
+                        if warns:
+                            del warns[-1]
+                            if not warns:
+                                del self._feds[uid]["warns"][user]
+                            _hcl.info(f"[HikariChat] forgave last warn for user={user} in fed={uid}")
+                            _sync_feds()
+                        else:
+                            _hcl.warning(f"[HikariChat] forgive warn: no warns for user={user}")
+                    else:
+                        _hcl.warning(f"[HikariChat] forgive warn: uid={uid!r} or user={user!r} not found")
+
+                elif action == "clear all user warns":
+                    uid = args.get("uid", "")
+                    user = str(args.get("user", ""))
+                    if uid in self._feds:
+                        self._feds[uid].get("warns", {}).pop(user, None)
+                        _hcl.info(f"[HikariChat] cleared all warns for user={user} in fed={uid}")
+                        _sync_feds()
+                    else:
+                        _hcl.warning(f"[HikariChat] clear all warns: uid={uid!r} not found")
+
+                elif action == "protect user":
+                    uid = args.get("uid", "")
+                    user = str(args.get("user", ""))
+                    if uid in self._feds:
+                        fdef = self._feds[uid].setdefault("fdef", [])
+                        if user in fdef:
+                            fdef.remove(user)
+                            _hcl.info(f"[HikariChat] removed fdef for user={user} in fed={uid}")
+                        else:
+                            fdef.append(user)
+                            _hcl.info(f"[HikariChat] added fdef for user={user} in fed={uid}")
+                        _sync_feds()
+
+                elif action == "rename federation":
+                    uid = args.get("uid", "")
+                    name = args.get("name", "")
+                    if uid in self._feds and name:
+                        self._feds[uid]["name"] = name
+                        _hcl.info(f"[HikariChat] renamed fed={uid} to {name!r}")
+                        _sync_feds()
+
+                elif action == "new note":
+                    uid = args.get("uid", "")
+                    shortname = args.get("shortname", "")
+                    note = args.get("note", "")
+                    if uid in self._feds and shortname:
+                        self._feds[uid].setdefault("notes", {})[shortname] = {
+                            "creator": u, "text": note
+                        }
+                        _hcl.info(f"[HikariChat] new note {shortname!r} in fed={uid}")
+                        _sync_feds()
+
+                elif action == "delete note":
+                    uid = args.get("uid", "")
+                    shortname = args.get("shortname", "")
+                    if uid in self._feds:
+                        self._feds[uid].get("notes", {}).pop(shortname, None)
+                        _hcl.info(f"[HikariChat] deleted note {shortname!r} from fed={uid}")
+                        _sync_feds()
+
+                else:
+                    _hcl.warning(f"[HikariChat] неизвестный action: {action!r}")
+
+            _api.request = _types.MethodType(_patched_request, _api)
+            _api._request_patched = True
+            logger.info(f"[compat] HikariChatAPI.request() patched for instant local apply ({mod_name})")
+    except Exception as _patch_err:
+        logger.debug(f"[compat] HikariChatAPI request patch skipped: {_patch_err}")
 
     # 7. Регистрируем обработчики
     from telethon import events
@@ -817,6 +1379,18 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
             client.add_event_handler(_wrap_html_handler(func), ev)
 
         # ── Callback-кнопки ──────────────────────────────────────────────
+        # Автодетект по суффиксу: Hikka соглашение — метод *_callback_handler
+        # регистрируется как глобальный callback handler (ловит любой data).
+        # Пример: actions_callback_handler в HikariChat ловит "dw/", "fb/" и т.д.
+        if (not getattr(func, "_is_callback_handler", False)
+                and attr_name.endswith("_callback_handler")
+                and not attr_name.startswith("_")):
+            _f2 = getattr(func, "__func__", func)
+            _f2._is_callback_handler = True
+            _f2._callback_pattern = re.compile(r"[fbmudw]{1,3}/[-0-9]+/[-#0-9]+")
+            _f2._is_inline_everyone = True  # кнопки публичные
+            logger.info(f"[compat] Auto-registered callback handler: {attr_name} for {mod_name}")
+
         if getattr(func, "_is_callback_handler", False):
             import re as _re
             pat = getattr(func, "_callback_pattern", _re.compile(".*"))
@@ -843,7 +1417,38 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
             }
             print(f"[compat] Registered inline handler: {_inline_name} for {mod_name}")
 
-    # 8. Сохраняем в реестре клиента
+    # 8. Запускаем loop-методы (autostart=True)
+    _loop_tasks = []
+    for _attr in dir(module_instance):
+        try:
+            _fn = getattr(module_instance, _attr)
+        except Exception:
+            continue
+        if not callable(_fn):
+            continue
+        if not getattr(_fn, "_is_loop", False):
+            continue
+        if not getattr(_fn, "_loop_autostart", False):
+            continue
+        _interval = getattr(_fn, "_loop_interval", 1)
+
+        async def _make_loop_task(fn=_fn, interval=_interval, name=_attr, mname=mod_name):
+            logger.info(f"[compat] loop task started: {mname}.{name} (interval={interval}s)")
+            while True:
+                try:
+                    await fn()
+                except asyncio.CancelledError:
+                    logger.info(f"[compat] loop task cancelled: {mname}.{name}")
+                    return
+                except Exception as _le:
+                    logger.warning(f"[compat] loop task {mname}.{name} error: {_le}")
+                await asyncio.sleep(interval)
+
+        _task = asyncio.ensure_future(_make_loop_task())
+        _loop_tasks.append((_attr, _task))
+        logger.info(f"[compat] Scheduled loop: {mod_name}.{_attr} every {_interval}s")
+
+    # 9. Сохраняем в реестре клиента
     if not hasattr(client, "modules"):
         client.modules = {}
     client.modules[f"heroku:{mod_name}"] = {
@@ -852,6 +1457,7 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
         "handlers": [],
         "heroku_compat": True,
         "file_name": file_path.stem,  # имя файла без .py, напр. "goypulse"
+        "loop_tasks": _loop_tasks,
     }
 
     print(f"[compat] Loaded {mod_name}, registered commands: {registered_commands}")

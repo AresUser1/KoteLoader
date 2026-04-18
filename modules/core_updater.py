@@ -1,7 +1,7 @@
 # modules/core_updater.py
 """
 <manifest>
-version: 1.2.0
+version: 1.3.0
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/core_updater.py
 author: Kote
 </manifest>

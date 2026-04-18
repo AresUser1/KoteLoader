@@ -78,8 +78,19 @@ class Float(_Validator):
 
 
 class String(_Validator):
-    """Строка."""
-    pass
+    """Строка с опциональными ограничениями длины."""
+    def __init__(self, *args, min_len=None, max_len=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.min_len = min_len
+        self.max_len = max_len
+
+    def validate(self, value):
+        v = str(value)
+        if self.min_len is not None and len(v) < self.min_len:
+            raise ValueError(f"Минимальная длина: {self.min_len}")
+        if self.max_len is not None and len(v) > self.max_len:
+            v = v[:self.max_len]
+        return v
 
 
 class Choice(_Validator):
@@ -123,13 +134,31 @@ class MultiChoice(_Validator):
 
 
 class Series(_Validator):
-    """Список строк. Оборачивает валидатор элементов."""
-    pass
+    """Список значений. Принимает строку с разделителем или список."""
+    def __init__(self, *args, separator=",", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.separator = separator
+
+    def validate(self, value):
+        if isinstance(value, list):
+            items = value
+        elif isinstance(value, str):
+            items = [v.strip() for v in value.split(self.separator) if v.strip()]
+        else:
+            items = [str(value)]
+        # Если есть вложенный валидатор — применяем к каждому элементу
+        if self._inner is not None:
+            items = [self._inner.validate(item) for item in items]
+        return items
 
 
 class URL(_Validator):
-    """URL-строка."""
-    pass
+    """URL-строка. Проверяет что начинается с http:// или https://."""
+    def validate(self, value):
+        v = str(value).strip()
+        if v and not v.startswith(("http://", "https://", "tg://")):
+            raise ValueError(f"Некорректный URL: {v!r}")
+        return v
 
 
 class Regex(_Validator):
@@ -137,10 +166,20 @@ class Regex(_Validator):
     def __init__(self, pattern=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if isinstance(pattern, str):
+            import re as _re
             self.pattern = pattern
+            self._compiled = _re.compile(pattern)
             self._inner = None
         elif isinstance(pattern, _Validator):
             self.pattern = None
+            self._compiled = None
             self._inner = pattern
         else:
             self.pattern = None
+            self._compiled = None
+
+    def validate(self, value):
+        v = str(value)
+        if self._compiled is not None and not self._compiled.search(v):
+            raise ValueError(f"Значение не соответствует паттерну {self.pattern!r}")
+        return v

@@ -61,8 +61,22 @@ USER_INSTALL = False
 
 class ConfigValue:
     """Одно поле конфигурации модуля."""
-    def __init__(self, name: str, default: Any = None, doc: str = "",
-                 validator=None):
+    def __init__(self, name: str = None, default: Any = None, doc: str = "",
+                 validator=None, option: str = None, title: str = None,
+                 description: str = None, **kwargs):
+        # Hikka-стиль: ConfigValue(option="key", ...) вместо ConfigValue("key", ...)
+        # Также поддерживаем title= как алиас для name=
+        if name is None:
+            name = option or title or ""
+        # description= — алиас для doc=
+        if not doc and description:
+            doc = description
+        # Если doc — callable (lambda) — вызываем сразу
+        if callable(doc):
+            try:
+                doc = doc()
+            except Exception:
+                doc = str(doc)
         self.name = name
         self.default = default
         self.doc = doc
@@ -221,28 +235,216 @@ def command(alias: str = None, **kwargs):
     return decorator
 
 
+def _make_access_decorator(required_level: str, allow_inline: bool = False):
+    """
+    Фабрика декораторов доступа.
+    Оборачивает обработчик проверкой уровня пользователя перед вызовом.
+
+    required_level:
+      "OWNER"    — только владелец
+      "SUDO"     — владелец + sudo (у нас TRUSTED)
+      "SUPPORT"  — владелец + trusted + support (у нас TRUSTED)
+      "ALL"      — все пользователи (inline_everyone / unrestricted)
+    allow_inline — если True, пропускаем проверку для inline callback (нет sender_id)
+    """
+    def decorator(func):
+        import functools
+
+        @functools.wraps(func)
+        async def wrapper(self_or_event, *args, **kwargs):
+            # Определяем откуда брать sender_id
+            # Для методов класса: self_or_event = self, первый arg = event/call
+            # Для функций:        self_or_event = event/call
+            event = args[0] if args else None
+            call_obj = self_or_event if not hasattr(self_or_event, 'client') else event
+
+            # inline callback (CallbackQuery) — sender_id берём из call.from_user.id
+            sender_id = None
+            try:
+                if hasattr(call_obj, "from_user"):
+                    sender_id = call_obj.from_user.id
+                elif hasattr(call_obj, "sender_id"):
+                    sender_id = call_obj.sender_id
+                elif hasattr(call_obj, "sender"):
+                    sender_id = getattr(call_obj.sender, "id", None)
+            except Exception:
+                pass
+
+            if required_level == "ALL" or (allow_inline and sender_id is None):
+                return await func(self_or_event, *args, **kwargs)
+
+            if sender_id is None:
+                logger.debug(f"[compat] access check: no sender_id, denying for {required_level}")
+                return
+
+            try:
+                from utils import database as _db
+                level = _db.get_user_level(sender_id)
+            except Exception:
+                level = "USER"
+
+            # Иерархия: OWNER > TRUSTED > USER
+            _hierarchy = {"OWNER": 3, "TRUSTED": 2, "SUDO": 2, "SUPPORT": 2, "USER": 1}
+            required_rank = _hierarchy.get(required_level, 3)
+            user_rank = _hierarchy.get(level, 1)
+
+            if user_rank >= required_rank:
+                return await func(self_or_event, *args, **kwargs)
+            else:
+                logger.debug(f"[compat] access denied: user {sender_id} level={level}, required={required_level}")
+
+        return wrapper
+    return decorator
+
+
 def unrestricted(func):
     """
-    @loader.unrestricted — помечает watcher/команду как доступную для всех.
-    В Hikka ограничивает фильтрацию по владельцу. У нас — просто заглушка,
-    возвращаем функцию как есть.
+    @loader.unrestricted — доступно всем пользователям без ограничений.
+    В Hikka снимает фильтр «только владелец» с watcher/команды.
     """
-    return func
+    import functools
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await func(*args, **kwargs)
+
+    wrapper._is_unrestricted = True
+    # Сохраняем оригинальные флаги
+    for _attr in ("_is_command", "_is_watcher", "_is_callback_handler",
+                  "_is_inline_handler", "_is_loop", "_command_name",
+                  "_command_kwargs", "_command_doc", "_watcher_kwargs",
+                  "_loop_interval", "_loop_autostart"):
+        if hasattr(func, _attr):
+            setattr(wrapper, _attr, getattr(func, _attr))
+    return wrapper
 
 
 def owner(func):
-    """@loader.owner — только для владельца. Заглушка."""
-    return func
+    """@loader.owner — только для владельца бота."""
+    import functools
+    _wrapped = _make_access_decorator("OWNER")(func)
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await _wrapped(*args, **kwargs)
+
+    for _attr in ("_is_command", "_is_watcher", "_is_callback_handler",
+                  "_is_inline_handler", "_command_name", "_command_kwargs",
+                  "_command_doc", "_watcher_kwargs"):
+        if hasattr(func, _attr):
+            setattr(wrapper, _attr, getattr(func, _attr))
+    return wrapper
 
 
 def sudo(func):
-    """@loader.sudo — для sudo-пользователей. Заглушка."""
-    return func
+    """@loader.sudo — для sudo-пользователей (у нас: OWNER + TRUSTED)."""
+    import functools
+    _wrapped = _make_access_decorator("SUDO")(func)
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await _wrapped(*args, **kwargs)
+
+    for _attr in ("_is_command", "_is_watcher", "_is_callback_handler",
+                  "_is_inline_handler", "_command_name", "_command_kwargs",
+                  "_command_doc", "_watcher_kwargs"):
+        if hasattr(func, _attr):
+            setattr(wrapper, _attr, getattr(func, _attr))
+    return wrapper
 
 
 def support(func):
-    """@loader.support — для support-пользователей. Заглушка."""
-    return func
+    """@loader.support — для support-пользователей (у нас: OWNER + TRUSTED)."""
+    import functools
+    _wrapped = _make_access_decorator("SUPPORT")(func)
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await _wrapped(*args, **kwargs)
+
+    for _attr in ("_is_command", "_is_watcher", "_is_callback_handler",
+                  "_is_inline_handler", "_command_name", "_command_kwargs",
+                  "_command_doc", "_watcher_kwargs"):
+        if hasattr(func, _attr):
+            setattr(wrapper, _attr, getattr(func, _attr))
+    return wrapper
+
+
+def inline_everyone(func):
+    """
+    @loader.inline_everyone — inline callback-кнопки доступны всем пользователям.
+    Помечает обработчик флагом, чтобы callback dispatcher не проверял уровень.
+    """
+    import functools
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await func(*args, **kwargs)
+
+    wrapper._is_inline_everyone = True
+    # Копируем все служебные атрибуты
+    for _attr in ("_is_command", "_is_watcher", "_is_callback_handler",
+                  "_is_inline_handler", "_command_name", "_command_kwargs",
+                  "_command_doc", "_watcher_kwargs"):
+        if hasattr(func, _attr):
+            setattr(wrapper, _attr, getattr(func, _attr))
+    return wrapper
+
+
+def loop(interval=1, autostart=False, **kwargs):
+    """
+    @loader.loop(interval=..., autostart=...) — периодическая задача (Hikka).
+    Помечает метод флагами. Реальный запуск asyncio-цикла происходит
+    в heroku_loader.load_heroku_module и _AllModules.register_module
+    при обнаружении _is_loop=True + _loop_autostart=True.
+    """
+    def decorator(func):
+        func._is_loop = True
+        func._loop_interval = interval
+        func._loop_autostart = autostart
+        func._loop_kwargs = kwargs
+        return func
+    return decorator
+
+
+async def _start_module_loops(module_instance, mod_name: str) -> list:
+    """
+    Запускает все loop-методы инстанса модуля у которых autostart=True.
+    Возвращает список (attr_name, asyncio.Task) для последующей отмены.
+    """
+    import asyncio
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+    tasks = []
+    for attr in dir(module_instance):
+        try:
+            fn = getattr(module_instance, attr)
+        except Exception:
+            continue
+        if not callable(fn):
+            continue
+        if not getattr(fn, "_is_loop", False):
+            continue
+        if not getattr(fn, "_loop_autostart", False):
+            continue
+        interval = getattr(fn, "_loop_interval", 1)
+
+        async def _run_loop(f=fn, iv=interval, n=attr, mn=mod_name):
+            _logger.info(f"[compat] loop started: {mn}.{n} (interval={iv}s)")
+            while True:
+                try:
+                    await f()
+                except asyncio.CancelledError:
+                    _logger.info(f"[compat] loop cancelled: {mn}.{n}")
+                    return
+                except Exception as exc:
+                    _logger.warning(f"[compat] loop {mn}.{n} error: {exc}")
+                await asyncio.sleep(iv)
+
+        task = asyncio.ensure_future(_run_loop())
+        tasks.append((attr, task))
+        _logger.info(f"[compat] Scheduled loop: {mod_name}.{attr} every {interval}s")
+    return tasks
 
 
 def watcher(**kwargs):
@@ -306,7 +508,7 @@ def callback_handler(**kwargs):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Inline-заглушка
+# Inline Manager — управление inline-кнопками и формами
 # ═══════════════════════════════════════════════════════════════════════════
 
 class _InlineManager:
@@ -321,9 +523,32 @@ class _InlineManager:
         self.bot_username = bot_username
         self._bot = bot_client  # TelegramClient бота, если запущен
 
+    @property
+    def init_complete(self) -> bool:
+        """
+        Hikka inline.init_complete — True если бот успешно запущен и работает.
+        Используется модулями чтобы понять доступен ли inline-режим.
+        """
+        return self._bot is not None and self.bot_username != ""
+
+    @property
+    def bot(self):
+        """Эмулирует self.inline.bot."""
+        from compat.loader import _BotStub
+        return _BotStub(self._client, bot_client=self._bot)
+
     def _generate_telethon_markup(self, buttons) -> list:
         """Внутренний метод: кнопки в формат Telethon Button (для form/send_message)."""
         from telethon.tl.custom import Button as TgButton
+
+        # Нормализуем формат кнопок:
+        # dict (одна кнопка)   → [[dict]]
+        # [dict, ...]          → [[dict, ...]]  (одна строка)
+        # [[dict, ...], ...]   → оставляем как есть
+        if isinstance(buttons, dict):
+            buttons = [[buttons]]
+        elif isinstance(buttons, list) and buttons and isinstance(buttons[0], dict):
+            buttons = [buttons]
 
         result = []
         for row in buttons:
@@ -346,9 +571,17 @@ class _InlineManager:
                         cb_args = (cb_args,)
                     data = _CallbackRegistry.register(cb_func, cb_args)
                     tg_row.append(TgButton.inline(text, data=data.encode("utf-8")))
+                elif "data" in btn:
+                    # Hikka-формат: {"text": "...", "data": "dw/chat/user"} — raw callback data
+                    raw_data = btn["data"]
+                    if isinstance(raw_data, str):
+                        raw_data = raw_data.encode("utf-8")
+                    tg_row.append(TgButton.inline(text, data=raw_data))
                 elif "copy" in btn:
-                    # copy-кнопка — просто текст (Telegram не поддерживает нативно)
                     tg_row.append(TgButton.inline(text, data=f"copy:{btn['copy'][:50]}"))
+                elif "action" in btn and btn["action"] == "close":
+                    # close-кнопка — специальный action из Hikka
+                    tg_row.append(TgButton.inline(text, data="close"))
                 else:
                     tg_row.append(TgButton.inline(text, data="noop"))
 
@@ -364,19 +597,53 @@ class _InlineManager:
 
     def generate_aiogram_markup(self, buttons):
         """Конвертирует список кнопок Heroku в aiogram InlineKeyboardMarkup.
-        Используется для InlineQueryResultArticle и других aiogram-объектов."""
-        # Stub-классы вместо aiogram (не требуют установки библиотеки)
-        class InlineKeyboardButton:
-            def __init__(self, text, callback_data=None, url=None,
-                         switch_inline_query_current_chat=None):
-                self.text = text
-                self.callback_data = callback_data
-                self.url = url
-                self.switch_inline_query_current_chat = switch_inline_query_current_chat
+        Используется для InlineQueryResultArticle и других aiogram-объектов.
 
-        class InlineKeyboardMarkup:
-            def __init__(self, inline_keyboard=None):
-                self.inline_keyboard = inline_keyboard or []
+        Если в sys.modules есть реальный aiogram (v2 или v3) — используем его
+        классы, чтобы pydantic-валидация в aiogram3 прошла isinstance-проверку.
+        Иначе — stub-классы (для Termux без aiogram).
+        """
+        import sys as _sys
+
+        # Пробуем взять реальные классы из aiogram (shim мог сохранить их)
+        _aio_types = _sys.modules.get("aiogram.types")
+        _RealIKM = getattr(_aio_types, "_real_InlineKeyboardMarkup", None)
+        _RealIKB = getattr(_aio_types, "_real_InlineKeyboardButton", None)
+
+        # Если реальных нет — пробуем импортировать напрямую
+        if _RealIKM is None:
+            try:
+                from aiogram.types import InlineKeyboardMarkup as _RealIKM
+                from aiogram.types import InlineKeyboardButton as _RealIKB
+            except Exception:
+                _RealIKM = None
+                _RealIKB = None
+
+        # Fallback stub-классы (aiogram не установлен, Termux и т.д.)
+        if _RealIKM is None:
+            class InlineKeyboardButton:
+                def __init__(self, text, callback_data=None, url=None,
+                             switch_inline_query_current_chat=None):
+                    self.text = text
+                    self.callback_data = callback_data
+                    self.url = url
+                    self.switch_inline_query_current_chat = switch_inline_query_current_chat
+            class InlineKeyboardMarkup:
+                def __init__(self, inline_keyboard=None):
+                    self.inline_keyboard = inline_keyboard or []
+        else:
+            InlineKeyboardMarkup = _RealIKM
+            InlineKeyboardButton = _RealIKB
+
+        # ── Строим кнопки ───────────────────────────────────────────────
+        def _make_btn(**kw):
+            """Создаёт кнопку совместимо с aiogram 2 и 3."""
+            try:
+                return InlineKeyboardButton(**kw)
+            except TypeError:
+                # aiogram 3 не принимает positional / неизвестные kwargs — фильтруем
+                valid = {k: v for k, v in kw.items() if v is not None}
+                return InlineKeyboardButton(**valid)
 
         kb_rows = []
         for row in buttons:
@@ -387,7 +654,7 @@ class _InlineManager:
                 text = btn.get("text", "?")
 
                 if "url" in btn:
-                    kb_row.append(InlineKeyboardButton(text=text, url=btn["url"]))
+                    kb_row.append(_make_btn(text=text, url=btn["url"]))
                 elif "callback" in btn:
                     cb_func = btn["callback"]
                     cb_args = btn.get("args", ())
@@ -396,17 +663,17 @@ class _InlineManager:
                     else:
                         cb_args = (cb_args,)
                     data = _CallbackRegistry.register(cb_func, cb_args)
-                    kb_row.append(InlineKeyboardButton(text=text, callback_data=data))
+                    kb_row.append(_make_btn(text=text, callback_data=data))
                 elif "copy" in btn:
                     data = _CallbackRegistry.register(lambda *a: None, ())
-                    kb_row.append(InlineKeyboardButton(text=text, callback_data=f"copy:{btn['copy'][:50]}"))
+                    kb_row.append(_make_btn(text=text, callback_data=f"copy:{btn['copy'][:50]}"))
                 elif "switch_inline" in btn:
-                    kb_row.append(InlineKeyboardButton(
+                    kb_row.append(_make_btn(
                         text=text,
                         switch_inline_query_current_chat=btn["switch_inline"]
                     ))
                 else:
-                    kb_row.append(InlineKeyboardButton(text=text, callback_data="noop"))
+                    kb_row.append(_make_btn(text=text, callback_data="noop"))
 
             if kb_row:
                 kb_rows.append(kb_row)
@@ -440,6 +707,8 @@ class _InlineManager:
             chat_id = getattr(message, "id", None)
         reply_to = getattr(message, "id", None)
 
+        logger.info(f"[compat] inline.form: chat_id={chat_id} reply_to={reply_to} bot={self.bot_username!r} has_markup={bool(reply_markup)}")
+
         # ── Метод 1: via @bot через _inline_query_patch (как FHeta) ─────
         if self._client is not None and self.bot_username and chat_id:
             try:
@@ -452,18 +721,64 @@ class _InlineManager:
                 _form_buttons = tg_buttons
                 _form_text    = text
 
+                # Заранее парсим текст с premium emoji (builder.article не понимает <emoji ...>)
+                # Если emoji есть — передаём pre-parsed text + formatting_entities
+                # Если нет — передаём как HTML (Telethon парсит стандартные теги сам)
+                _form_parsed_text  = None
+                _form_parsed_ents  = None
+                try:
+                    from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+                    if isinstance(_form_text, str) and _has_emoji_tags(_form_text):
+                        _form_parsed_text, _form_parsed_ents = _parse_emoji_html(_form_text)
+                        if not _form_parsed_text or not _form_parsed_text.strip():
+                            _form_parsed_text = None
+                            _form_parsed_ents = None
+                except Exception as _pre_err:
+                    logger.debug(f"[compat] inline.form: pre-parse emoji failed: {_pre_err}")
+
                 async def _form_inline_handler(tl_event):
                     """Raw Telethon InlineQuery handler — строит article с кнопками."""
                     _btns = _form_buttons  # Telethon Button list
-                    result = tl_event.builder.article(
-                        title="●",
-                        description=(_form_text[:50] if _form_text else ""),
-                        text=_form_text,
-                        parse_mode="html",
-                        buttons=_btns,
-                        link_preview=False,
-                    )
-                    await tl_event.answer([result], cache_time=0, private=True)
+
+                    if _form_parsed_text is not None:
+                        # Premium emoji: InlineBuilder.article() не принимает formatting_entities,
+                        # поэтому строим TL-объект вручную минуя builder.
+                        from telethon.tl import types as _tl_types
+                        from telethon.tl.types import (
+                            InputBotInlineResult,
+                            InputBotInlineMessageText,
+                        )
+                        # Конвертируем Telethon Button list → ReplyInlineMarkup
+                        _tl_markup = None
+                        if _btns:
+                            try:
+                                _tl_markup = tl_event.client.build_reply_markup(_btns)
+                            except Exception:
+                                pass
+                        _msg_obj = InputBotInlineMessageText(
+                            message=_form_parsed_text,
+                            entities=_form_parsed_ents or [],
+                            reply_markup=_tl_markup,
+                            no_webpage=True,
+                        )
+                        result = InputBotInlineResult(
+                            id="form_result",
+                            type="article",
+                            title="●",
+                            description=_form_parsed_text[:50] if _form_parsed_text else "",
+                            send_message=_msg_obj,
+                        )
+                        await tl_event.answer([result], cache_time=0, private=True)
+                    else:
+                        result = tl_event.builder.article(
+                            title="●",
+                            description=(_form_text[:50] if _form_text else ""),
+                            text=_form_text,
+                            parse_mode="html",
+                            buttons=_btns,
+                            link_preview=False,
+                        )
+                        await tl_event.answer([result], cache_time=0, private=True)
 
                 _pat = _re_form.compile(rf"^{_re_form.escape(_token)}$")
                 _IHR[_pat] = {
@@ -498,39 +813,82 @@ class _InlineManager:
                 import traceback as _tb_form
                 logger.debug(_tb_form.format_exc())
 
-        # ── Метод 2: бот шлёт напрямую send_message (если участник чата) ─
-        if self._bot is not None and chat_id:
-            _bot_in_chat = True
+        # ── Метод 2: userbot шлёт напрямую (поддерживает premium emoji) ──
+        # Бот не может слать premium emoji — используем userbot как основной fallback.
+        # Если userbot не является участником чата — тоже упадёт в except и пойдёт к методу 3.
+        if self._client is not None and chat_id:
             try:
-                await self._bot.get_input_entity(chat_id)
-            except Exception:
-                _bot_in_chat = False
-            if _bot_in_chat:
                 try:
-                    try:
-                        await message.delete()
-                    except Exception:
-                        pass
-                    await self._bot.send_message(
+                    await message.delete()
+                except Exception:
+                    pass
+                # Premium emoji поддержка
+                _m2_has_emoji = False
+                _m2_parsed_text = None
+                _m2_parsed_ents = None
+                try:
+                    from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+                    if isinstance(text, str) and _has_emoji_tags(text):
+                        _m2_parsed_text, _m2_parsed_ents = _parse_emoji_html(text)
+                        if _m2_parsed_text and _m2_parsed_text.strip():
+                            _m2_has_emoji = True
+                except Exception:
+                    pass
+                if _m2_has_emoji:
+                    await self._client.send_message(
+                        chat_id, _m2_parsed_text,
+                        formatting_entities=_m2_parsed_ents,
+                        buttons=tg_buttons, link_preview=False,
+                    )
+                else:
+                    await self._client.send_message(
                         chat_id, text,
                         buttons=tg_buttons, parse_mode="html",
                         link_preview=False,
                     )
-                    logger.info("[compat] inline.form: sent via bot.send_message OK")
-                    return
-                except Exception as _e2:
-                    logger.warning(f"[compat] inline.form bot.send_message failed: {_e2}")
+                logger.info("[compat] inline.form: sent via userbot.send_message OK")
+                return
+            except Exception as _e2:
+                logger.warning(f"[compat] inline.form userbot.send_message failed: {_e2}")
 
-        # ── Метод 3: userbot edit/send (без callback-кнопок) ─────────────
+        # ── Метод 3: userbot edit/send — с поддержкой premium emoji ────────
         async def _send(txt, btns):
             try:
-                await message.edit(txt, buttons=btns, parse_mode="html", link_preview=False)
+                from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+                _hase = isinstance(txt, str) and _has_emoji_tags(txt)
+            except Exception:
+                _hase = False
+
+            async def _do_edit(t, ents=None):
+                if ents is not None:
+                    return await message.edit(t, formatting_entities=ents, buttons=btns, link_preview=False)
+                return await message.edit(t, buttons=btns, parse_mode="html", link_preview=False)
+
+            async def _do_send(t, ents=None):
+                if ents is not None:
+                    return await self._client.send_message(chat_id, t, formatting_entities=ents, buttons=btns, link_preview=False)
+                return await self._client.send_message(chat_id, t, parse_mode="html", buttons=btns, link_preview=False)
+
+            if _hase:
+                _ep_txt, _ep_ents = _parse_emoji_html(txt)
+                if _ep_txt and _ep_txt.strip():
+                    try:
+                        await _do_edit(_ep_txt, _ep_ents)
+                        return True
+                    except Exception:
+                        pass
+                    try:
+                        await _do_send(_ep_txt, _ep_ents)
+                        return True
+                    except Exception:
+                        return False
+            try:
+                await _do_edit(txt)
                 return True
             except Exception:
                 pass
             try:
-                await self._client.send_message(
-                    chat_id, txt, buttons=btns, parse_mode="html", link_preview=False)
+                await _do_send(txt)
                 return True
             except Exception:
                 return False
@@ -553,11 +911,6 @@ class _InlineManager:
         if not await _send(text + hint, None):
             logger.warning("[compat] inline.form: все методы отправки не удались")
 
-    @property
-    def bot(self):
-        """Эмулирует self.inline.bot. Передаём bot_client для редактирования inline-сообщений."""
-        return _BotStub(self._client, bot_client=self._bot)
-
 
 class _BotStub:
     """
@@ -578,12 +931,27 @@ class _BotStub:
     def _convert_markup(reply_markup):
         """
         Принимает reply_markup в любом формате и возвращает Telethon-совместимый список.
-        - None                         -> None
-        - [[TgButton, ...], ...]       -> оставляем как есть
-        - aiogram InlineKeyboardMarkup -> конвертируем в [[TgButton, ...], ...]
+        - None                              -> None
+        - dict (одна Hikka-кнопка)          -> [[TgButton]]
+        - [dict, ...]                       -> [[TgButton, ...]]
+        - [[dict, ...], ...]                -> [[TgButton, ...], ...]
+        - aiogram InlineKeyboardMarkup      -> [[TgButton, ...], ...]
+        - [[TgButton, ...], ...]            -> оставляем как есть
         """
         if reply_markup is None:
             return None
+        # Hikka dict-формат — делегируем _InlineManager._generate_telethon_markup
+        if isinstance(reply_markup, dict) or (
+            isinstance(reply_markup, list) and reply_markup
+            and isinstance(reply_markup[0], (dict, list))
+            and (isinstance(reply_markup[0], dict)
+                 or (reply_markup[0] and isinstance(reply_markup[0][0], dict)))
+        ):
+            try:
+                from compat.loader import _InlineManager
+                return _InlineManager(None)._generate_telethon_markup(reply_markup) or None
+            except Exception:
+                pass
         if hasattr(reply_markup, "inline_keyboard"):
             from telethon.tl.custom import Button as TgButton
             rows = []
@@ -615,9 +983,31 @@ class _BotStub:
             return not lo.is_disabled
         return False
 
-    async def edit_message_text(self, chat_id=None, message_id=None, text="",
-                                 inline_message_id=None, reply_markup=None,
+    async def edit_message_text(self, text_or_chat_id=None, chat_id_or_msg_id=None,
+                                 text=None, inline_message_id=None, reply_markup=None,
                                  parse_mode="HTML", link_preview_options=None, **kwargs):
+        """
+        Совместимая сигнатура: поддерживает оба варианта вызова:
+          - aiogram-стиль: edit_message_text(text, inline_message_id=..., ...)
+          - python-telegram-bot-стиль: edit_message_text(chat_id, message_id, text, ...)
+        Определяем вариант по наличию inline_message_id и типу первого аргумента.
+        """
+        # Определяем: первый аргумент text или chat_id?
+        # Если передан inline_message_id явно — первый аргумент точно text (aiogram-стиль)
+        # Если первый аргумент — строка и нет inline_message_id — тоже text (aiogram-стиль)
+        # Если первый аргумент — int/None и есть второй int — chat_id, message_id, text
+        if inline_message_id is not None or isinstance(text_or_chat_id, str):
+            # aiogram-стиль: edit_message_text(text, inline_message_id=...) 
+            if text is None:
+                text = text_or_chat_id or ""
+            chat_id = None
+            message_id = None
+        else:
+            # ptb-стиль: edit_message_text(chat_id, message_id, text, ...)
+            chat_id = text_or_chat_id
+            message_id = chat_id_or_msg_id
+            if text is None:
+                text = ""
         import traceback as _tb
         buttons = self._convert_markup(reply_markup)
         lp = self._lo_to_bool(link_preview_options)
@@ -683,13 +1073,29 @@ class _BotStub:
                         except Exception as _mke:
                             logger.warning(f"[compat] edit_message_text: build_reply_markup failed: {_mke}")
 
-                    # Парсим HTML/MD -> entities
-                    from telethon.extensions import html as tl_html, markdown as tl_md
-                    if parse_mode and parse_mode.lower() in ("html", "htm"):
-                        msg_text, entities = tl_html.parse(text)
-                    else:
-                        msg_text, entities = tl_md.parse(text)
+                    # Парсим HTML + premium emoji -> entities
+                    try:
+                        from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+                        _has_emj = _has_emoji_tags(text)
+                    except Exception:
+                        _has_emj = False
 
+                    if _has_emj:
+                        msg_text, entities = _parse_emoji_html(text)
+                    else:
+                        from telethon.extensions import html as tl_html, markdown as tl_md
+                        if parse_mode and parse_mode.lower() in ("html", "htm"):
+                            msg_text, entities = tl_html.parse(text)
+                        else:
+                            msg_text, entities = tl_md.parse(text)
+
+                    if not msg_text or not msg_text.strip():
+                        # Telegram не принимает пустое сообщение
+                        logger.warning(f"[compat] edit_message_text: пустой msg_text, text={text[:80]!r}")
+                        msg_text = " "  # неразрывный пробел — надёжнее zero-width space
+                        entities = []
+
+                    logger.info(f"[compat] edit_message_text: msg_text_len={len(msg_text)} entities={len(entities)}")
                     await editor(tl_functions.messages.EditInlineBotMessageRequest(
                         id=iid,
                         message=msg_text,
@@ -702,33 +1108,48 @@ class _BotStub:
                     logger.warning(f"[compat] bot.edit_message_text (inline) FAILED: {_e}\n{_tb.format_exc()}")
             elif message_id and chat_id is not None and chat_id != 0:
                 # Бот отправил сообщение от своего имени (bot.send_message в click()),
-                # значит только бот может его редактировать.
-                # chat_id может совпадать с user_id (Saved Messages) — нужен правильный peer.
-                if self._bot is None:
-                    logger.warning("[compat] edit_message_text: bot_client is None, cannot edit")
+                # но в нашем случае userbot делал send_message — значит редактируем через userbot.
+                if self._client is None and self._bot is None:
+                    logger.warning("[compat] edit_message_text: no client available, cannot edit")
                     return
                 try:
                     # Для Saved Messages chat_id == sender user_id.
                     # Бот не может писать в Saved Messages юзера напрямую по user_id —
                     # нужно открыть диалог с юзером. Используем entity из bot_client.
                     from telethon.tl.types import InputPeerUser, InputPeerChannel, InputPeerChat
+                    # Определяем редактора: сначала userbot (поддерживает premium emoji),
+                    # затем bot_client как fallback
+                    _editor_client = self._client or self._bot
                     try:
-                        peer_entity = await self._bot.get_input_entity(int(chat_id))
+                        peer_entity = await _editor_client.get_input_entity(int(chat_id))
                     except Exception:
                         peer_entity = int(chat_id)
 
-                    logger.info(f"[compat] edit_message_text: bot editing msg_id={message_id} in peer={peer_entity!r}")
-                    await self._bot.edit_message(
-                        peer_entity,
-                        message_id,
-                        text,
-                        parse_mode="html",
-                        buttons=buttons,
-                        link_preview=lp,
+                    # Premium emoji поддержка при редактировании
+                    try:
+                        from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+                        _has_emj = isinstance(text, str) and _has_emoji_tags(text)
+                    except Exception:
+                        _has_emj = False
+
+                    logger.info(f"[compat] edit_message_text: editing msg_id={message_id} in peer={peer_entity!r} has_emoji={_has_emj}")
+                    if _has_emj:
+                        _ep_text, _ep_ents = _parse_emoji_html(text)
+                        if _ep_text and _ep_text.strip():
+                            await _editor_client.edit_message(
+                                peer_entity, message_id, _ep_text,
+                                formatting_entities=_ep_ents,
+                                buttons=buttons, link_preview=lp,
+                            )
+                            logger.info("[compat] edit_message_text: edit with emoji OK")
+                            return
+                    await _editor_client.edit_message(
+                        peer_entity, message_id, text,
+                        parse_mode="html", buttons=buttons, link_preview=lp,
                     )
-                    logger.info("[compat] edit_message_text: bot.edit_message OK")
+                    logger.info("[compat] edit_message_text: edit OK")
                 except Exception as _bot_edit_err:
-                    logger.warning(f"[compat] edit_message_text via bot failed: {_bot_edit_err}\n{_tb.format_exc()}")
+                    logger.warning(f"[compat] edit_message_text failed: {_bot_edit_err}\n{_tb.format_exc()}")
             else:
                 logger.warning("[compat] bot.edit_message_text: нет chat_id+message_id и нет inline_message_id")
         except Exception as e:
@@ -736,9 +1157,32 @@ class _BotStub:
 
     async def send_message(self, chat_id, text, reply_markup=None,
                            parse_mode="HTML", link_preview_options=None, **kwargs):
+        """
+        Отправка сообщения через userbot (self._client).
+        Premium emoji (<emoji document_id=...>) отправляем через userbot с formatting_entities —
+        боты не могут отправлять custom emoji (нет прав на premium), но userbot с премиумом может.
+        """
         buttons = self._convert_markup(reply_markup)
         lp = self._lo_to_bool(link_preview_options)
         try:
+            from compat.heroku_loader import _has_emoji_tags, _parse_emoji_html
+            has_emoji = isinstance(text, str) and _has_emoji_tags(text)
+        except Exception:
+            has_emoji = False
+
+        try:
+            if has_emoji:
+                # Парсим premium emoji и отправляем через userbot с formatting_entities
+                parsed_text, all_entities = _parse_emoji_html(text)
+                if parsed_text and parsed_text.strip():
+                    await self._client.send_message(
+                        chat_id, parsed_text,
+                        formatting_entities=all_entities,
+                        buttons=buttons,
+                        link_preview=lp,
+                    )
+                    return
+            # Обычный HTML — через userbot с parse_mode="html"
             await self._client.send_message(
                 chat_id, text,
                 parse_mode="html",
@@ -973,7 +1417,10 @@ class _CallableStrings(dict):
     и как callable (self.strings("key", **kwargs)).
     Этот класс поддерживает оба варианта одновременно.
     """
-    def __call__(self, key: str, **kwargs) -> str:
+    def __call__(self, key: str, message=None, **kwargs) -> str:
+        # message/call — второй позиционный аргумент в Hikka API:
+        # self.strings("key", message) используется для определения языка пользователя.
+        # У нас один язык — просто игнорируем его.
         value = self.get(key, key)
         if kwargs:
             try:
@@ -1048,7 +1495,12 @@ class Module:
         Возвращаем заглушку загрузчика с allmodules.register_module().
         """
         if module_name.lower() == "loader":
-            return _LoaderModuleStub(self.client)
+            # Кешируем стаб на клиенте — иначе каждый вызов lookup("loader")
+            # создаёт новый _AllModules с пустым .modules [], и FHeta ловит
+            # "Error, perhaps the module is broken!" при попытке .remove(instance).
+            if not hasattr(self.client, "_loader_stub"):
+                self.client._loader_stub = _LoaderModuleStub(self.client)
+            return self.client._loader_stub
         # Для других модулей — ищем в client.modules
         if self.client:
             mods = getattr(self.client, "modules", {})
@@ -1344,6 +1796,7 @@ class _AllModules:
                         "pytz": "pytz",
                         "aiohttp": "aiohttp",
                         "requests": "requests",
+                        "websockets": "websockets",
                         "gtts": "gTTS",
                         "pydub": "pydub",
                         "qrcode": "qrcode",
@@ -1388,7 +1841,11 @@ class _AllModules:
         for name, obj in inspect.getmembers(mod, inspect.isclass):
             if obj is HerokuModule:
                 continue
-            if issubclass(obj, HerokuModule) or getattr(obj, "_is_heroku_module", False):
+            try:
+                is_sub = issubclass(obj, HerokuModule)
+            except TypeError:
+                is_sub = False
+            if is_sub or getattr(obj, "_is_heroku_module", False):
                 instance = obj()
                 break
 
@@ -1402,11 +1859,17 @@ class _AllModules:
         instance._client = self._client   # алиас: Hikka-модули используют self._client
         from compat.heroku_loader import _DbAdapter
         instance.db = _DbAdapter(db_module)
-        try:
-            me = await self._client.get_me()
-            instance._tg_id = me.id
-        except Exception:
-            pass
+        # _tg_id нужен на клиенте ДО client_ready (HikariChatAPI стартует там через ensure_future)
+        _me_id = getattr(self._client, "_tg_id", None)
+        if not _me_id:
+            try:
+                me = await self._client.get_me()
+                _me_id = me.id
+            except Exception:
+                _me_id = 0
+        self._client._tg_id = _me_id
+        self._client.tg_id  = _me_id
+        instance._tg_id = _me_id
 
         # bot_username — username именно бота, не юзербота
         bot_client = getattr(self._client, "bot_client", None)
@@ -1583,7 +2046,7 @@ class _AllModules:
 
         # Загружаем конфиг из БД
         mod_name = instance._get_module_name()
-        if isinstance(instance.config, ModuleConfig):
+        if hasattr(instance, "config") and isinstance(instance.config, ModuleConfig):
             for key in instance.config._meta:
                 saved = db_module.get_module_config(mod_name, key)
                 if saved is not None:
@@ -1740,7 +2203,12 @@ class _AllModules:
             "handlers": [],
             "heroku_compat": True,
             "file_name": _file_name,
+            "loop_tasks": [],
         }
+
+        # ── 8b. Запускаем loop-методы (autostart=True) ──────────────────
+        _loop_tasks = await _start_module_loops(instance, mod_name)
+        self._client.modules[f"heroku:{mod_name}"]["loop_tasks"] = _loop_tasks
 
         # Добавляем в список allmodules.modules
         self.modules.append(instance)
@@ -1774,6 +2242,14 @@ class _AllModules:
 
         mod_data = mods.pop(target_key)
         instance = mod_data.get("instance")
+
+        # Отменяем loop-задачи модуля
+        for _lname, _ltask in mod_data.get("loop_tasks", []):
+            try:
+                _ltask.cancel()
+                logger.info(f"[compat] unload_module: cancelled loop task {_lname}")
+            except Exception:
+                pass
 
         # Удаляем обработчики
         for func, handler in mod_data.get("handlers", []):
@@ -1946,16 +2422,24 @@ class _LoaderModuleStub:
         return True
 
     def __getattr__(self, name: str):
-        """Любой неизвестный атрибут — возвращаем безопасную заглушку."""
-        async def _async_noop(*a, **kw):
-            return None
-        def _noop(*a, **kw):
-            return None
-        # Эвристика: если имя выглядит как async-метод — возвращаем корутину
-        _async_names = {"fetch", "load", "install", "unload", "send", "register", "ready"}
+        """
+        Неизвестный атрибут — возвращаем безопасный callable с логированием.
+        Это позволяет отлавливать что именно вызывает модуль и при необходимости
+        добавить реальную реализацию.
+        """
+        _async_names = {"fetch", "load", "install", "unload", "send", "register", "ready",
+                        "update", "reload", "save", "notify", "dispatch", "handle"}
+
         if any(name.startswith(n) or name.endswith(n) for n in _async_names):
-            return _async_noop
-        return _noop
+            async def _async_stub(*a, **kw):
+                logger.debug(f"[compat] _LoaderModuleStub.{name}() called (not implemented)")
+                return None
+            return _async_stub
+        else:
+            def _sync_stub(*a, **kw):
+                logger.debug(f"[compat] _LoaderModuleStub.{name}() called (not implemented)")
+                return None
+            return _sync_stub
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1993,7 +2477,30 @@ class _Utils:
 
     @staticmethod
     def get_chat_id(message) -> int:
+        """
+        Возвращает chat_id в Hikka-формате:
+        - супергруппы/каналы: -100{channel_id}  (например -1002898708647)
+        - обычные группы: -{chat_id}
+        - личные чаты: user_id (положительный)
+        Telethon message.chat_id возвращает просто channel_id без -100,
+        что не совпадает с тем как HikariChat хранит chats в БД.
+        """
         try:
+            peer = getattr(message, "peer_id", None)
+            if peer is not None:
+                # PeerChannel (супергруппа / канал)
+                cid = getattr(peer, "channel_id", None)
+                if cid is not None:
+                    return int(f"-100{cid}")
+                # PeerChat (обычная группа)
+                cid = getattr(peer, "chat_id", None)
+                if cid is not None:
+                    return -cid
+                # PeerUser (личка)
+                cid = getattr(peer, "user_id", None)
+                if cid is not None:
+                    return cid
+            # fallback: message.chat_id (Telethon)
             return message.chat_id
         except Exception:
             return 0
@@ -2090,11 +2597,105 @@ class _Utils:
         return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
     @staticmethod
-    def dnd(*args, **kwargs):
-        """Заглушка utils.dnd — архивация чата (не критично если не работает)."""
-        import asyncio
-        async def _noop(): pass
-        return _noop()
+    def chunks(lst: list, n: int) -> list:
+        """
+        utils.chunks(lst, n) — разбивает список на подсписки по n элементов.
+        Используется в HikariChat для разбивки кнопок по строкам.
+        Пример: chunks([1,2,3,4,5], 2) → [[1,2],[3,4],[5]]
+        """
+        return [lst[i:i + n] for i in range(0, len(lst), n)]
+
+    @staticmethod
+    def get_link(entity) -> str:
+        """
+        utils.get_link(user/chat) — возвращает HTML-ссылку на пользователя или чат.
+        Формат: <a href="tg://user?id=123">Имя</a> для юзеров
+                <a href="https://t.me/username">Имя</a> для чатов с username
+        """
+        try:
+            from telethon.utils import get_display_name as _gdn
+            name = _gdn(entity) or str(getattr(entity, "id", "?"))
+        except Exception:
+            name = str(getattr(entity, "first_name", None)
+                       or getattr(entity, "title", None)
+                       or getattr(entity, "id", "?"))
+
+        uid = getattr(entity, "id", None)
+        username = getattr(entity, "username", None)
+
+        if username:
+            return f'<a href="https://t.me/{username}">{html.escape(name)}</a>'
+        elif uid:
+            return f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
+        return html.escape(name)
+
+    @staticmethod
+    def get_entity_url(entity) -> str:
+        """
+        utils.get_entity_url(entity) — возвращает прямую URL-ссылку на юзера/чат.
+        Возвращает строку URL (без HTML-тега), в отличие от get_link.
+        """
+        username = getattr(entity, "username", None)
+        uid = getattr(entity, "id", None)
+
+        if username:
+            return f"https://t.me/{username}"
+        elif uid:
+            return f"tg://user?id={uid}"
+        return ""
+
+    @staticmethod
+    async def get_message_link(message, chat=None) -> str:
+        """
+        utils.get_message_link(message, chat) — возвращает прямую ссылку на сообщение.
+        Формат: https://t.me/c/<chat_id>/<msg_id> для приватных чатов
+                https://t.me/<username>/<msg_id> для публичных
+        """
+        try:
+            msg_id = getattr(message, "id", None)
+            if msg_id is None:
+                return ""
+
+            # Определяем chat
+            target = chat or getattr(message, "chat", None) or getattr(message, "peer_id", None)
+            chat_id = getattr(target, "id", None) or getattr(message, "chat_id", None)
+
+            if chat_id is None:
+                return ""
+
+            username = getattr(target, "username", None)
+            if username:
+                return f"https://t.me/{username}/{msg_id}"
+
+            # Приватный чат/группа — убираем знак минус из chat_id супергруппы
+            if isinstance(chat_id, int) and chat_id < 0:
+                clean_id = str(chat_id).lstrip("-100").lstrip("-")
+                return f"https://t.me/c/{clean_id}/{msg_id}"
+
+            return f"https://t.me/c/{chat_id}/{msg_id}"
+        except Exception as e:
+            logger.debug(f"[compat] get_message_link failed: {e}")
+            return ""
+
+    @staticmethod
+    async def dnd(client, chat, archive: bool = True):
+        """
+        utils.dnd(client, chat, archive) — архивирует/разархивирует диалог.
+        Использует Telethon FoldersRequest для перемещения в архив (folder_id=1).
+        """
+        try:
+            from telethon import functions, types
+            peer = await client.get_input_entity(chat)
+            if archive:
+                await client(functions.folders.EditPeerFoldersRequest(
+                    folder_peers=[types.InputFolderPeer(peer=peer, folder_id=1)]
+                ))
+            else:
+                await client(functions.folders.EditPeerFoldersRequest(
+                    folder_peers=[types.InputFolderPeer(peer=peer, folder_id=0)]
+                ))
+        except Exception as e:
+            logger.warning(f"[compat] utils.dnd failed: {e}")
 
     @staticmethod
     def rand(length: int = 16) -> str:
@@ -2104,6 +2705,42 @@ class _Utils:
         import string
         chars = string.ascii_letters + string.digits
         return "".join(random.choice(chars) for _ in range(length))
+
+    def register_placeholder(self, name: str, func, description: str = ""):
+        """
+        Регистрирует placeholder-функцию (используется YaMusic и другими модулями).
+        Hikka API: utils.register_placeholder("now_play", func, "описание")
+        Placeholder'ы — это динамически вычисляемые переменные для bio/текстов.
+        Сохраняем для возможного использования, не крашимся если не реализовано.
+        """
+        if not hasattr(self, "_placeholders"):
+            self._placeholders = {}
+        self._placeholders[name] = {"func": func, "description": description}
+        import logging
+        logging.getLogger("compat.loader").debug(
+            f"[compat] register_placeholder: {name!r} зарегистрирован"
+        )
+
+    def get_placeholder(self, name: str):
+        """Возвращает функцию placeholder по имени или None."""
+        return getattr(self, "_placeholders", {}).get(name, {}).get("func")
+
+    async def call_placeholder(self, name: str):
+        """Вызывает placeholder по имени и возвращает результат или ''."""
+        fn = self.get_placeholder(name)
+        if fn is None:
+            return ""
+        try:
+            import asyncio
+            if asyncio.iscoroutinefunction(fn):
+                return await fn()
+            return fn()
+        except Exception as _e:
+            import logging
+            logging.getLogger("compat.loader").warning(
+                f"[compat] call_placeholder({name!r}) error: {_e}"
+            )
+            return ""
 
 
 # Синглтон utils для импорта

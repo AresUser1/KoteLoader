@@ -11,6 +11,14 @@ from utils import database as db
 from utils.message_builder import build_message
 from telethon.tl.types import MessageEntityBold, MessageEntityCode
 
+# Устанавливаем aiogram shim сразу при старте —
+# до загрузки модулей, чтобы importlib.util.find_spec("aiogram") не падал
+try:
+    from compat.aiogram_shim import install_aiogram_shim
+    install_aiogram_shim()
+except Exception:
+    pass
+
 COMMAND_FILE = Path(__file__).parent.parent / "command.json"
 
 async def command_worker(user_client):
