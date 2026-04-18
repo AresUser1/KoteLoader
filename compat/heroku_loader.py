@@ -213,6 +213,51 @@ def _create_fake_package(package_name: str):
     sys.modules[f"{package_name}.types"] = types_mod
     pkg.types = types_mod
 
+    # ── security (FTG/Heroku: from .. import security) ──────────────────
+    # Константы-битмаски совместимы с оригинальным FTG security.
+    # check_security() реально ходит в database.get_user_level KoteLoader.
+    security_mod = types.ModuleType(f"{package_name}.security")
+    security_mod.__package__ = package_name
+
+    security_mod.OWNER        = 1 << 0
+    security_mod.SUDO         = 1 << 1
+    security_mod.SUPPORT      = 1 << 2
+    security_mod.GROUP_OWNER  = 1 << 3
+    security_mod.GROUP_ADMIN  = 1 << 4
+    security_mod.GROUP_MEMBER = 1 << 5
+    security_mod.PM           = 1 << 6
+    security_mod.EVERYONE     = (1 << 7) - 1
+
+    _LEVEL_TO_MASK = {
+        "OWNER":   (1 << 7) - 1,  # все права
+        "TRUSTED": (1 << 1) | (1 << 2) | (1 << 6) | ((1 << 7) - 1),  # SUDO + SUPPORT + EVERYONE
+        "SUDO":    (1 << 1) | (1 << 2) | ((1 << 7) - 1),
+        "USER":    (1 << 7) - 1,  # только EVERYONE
+    }
+
+    def _check_security(event, flags: int) -> bool:
+        """Проверяет права отправителя через KoteLoader database."""
+        try:
+            sender_id = getattr(event, 'sender_id', None)
+            if sender_id is None:
+                return False
+            from utils import database as _db
+            level = _db.get_user_level(sender_id)
+            user_mask = _LEVEL_TO_MASK.get(level, (1 << 7) - 1)
+            return bool(user_mask & flags)
+        except Exception:
+            return False
+
+    security_mod.check_security = _check_security
+
+    sys.modules[f"{package_name}.security"] = security_mod
+    pkg.security = security_mod
+
+    for _fw in ("hikka", "dragon", "watgbridge"):
+        if _fw in sys.modules:
+            sys.modules[_fw].security = security_mod
+        sys.modules[f"{_fw}.security"] = security_mod
+
     # from ..inline.types import InlineCall, InlineMessage
     inline_mod = types.ModuleType(f"{package_name}.inline")
     inline_types_mod = types.ModuleType(f"{package_name}.inline.types")
@@ -730,7 +775,7 @@ async def _install_module_requires(file_path) -> list:
         logger.info(f"[requires] Устанавливаем {display_name} ({pip_spec})...")
         try:
             proc = await asyncio.create_subprocess_exec(
-                "pip", "install", "--quiet", "--no-input", pip_spec,
+                "pip", "install", "--quiet", "--no-input", "--break-system-packages", pip_spec,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

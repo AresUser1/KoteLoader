@@ -391,6 +391,128 @@ def inline_everyone(func):
     return wrapper
 
 
+def ratelimit(func):
+    """
+    @loader.ratelimit — ограничение частоты вызовов (FTG/Heroku-совместимость).
+    В KoteLoader не реализует реальный рейтлимит — просто pass-through,
+    чтобы модули с этим декоратором не падали при импорте.
+    """
+    import functools
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await func(*args, **kwargs)
+
+    for _attr in ("_is_command", "_is_watcher", "_is_callback_handler",
+                  "_is_inline_handler", "_command_name", "_command_kwargs",
+                  "_command_doc", "_watcher_kwargs"):
+        if hasattr(func, _attr):
+            setattr(wrapper, _attr, getattr(func, _attr))
+    return wrapper
+
+
+def _group_admin_check(required_right: str):
+    """
+    Фабрика декораторов проверки прав администратора в чате.
+    required_right — название права у ChatAdminRights (например 'ban_users', 'add_admins').
+    Дополнительно проверяет, что вызывающий — OWNER или TRUSTED в KoteLoader.
+    """
+    import functools
+
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(self_or_event, *args, **kwargs):
+            # Определяем event и client
+            if hasattr(self_or_event, 'client'):
+                # вызов как метод класса: self_or_event=self, args[0]=message
+                self_ = self_or_event
+                event = args[0] if args else None
+                client = getattr(self_, 'client', None) or getattr(self_, '_client', None)
+            else:
+                self_ = None
+                event = self_or_event
+                client = getattr(event, 'client', None)
+
+            if event is None or client is None:
+                return
+
+            sender_id = getattr(event, 'sender_id', None)
+            if sender_id is None:
+                return
+
+            # Проверяем уровень доступа в KoteLoader
+            try:
+                from utils import database as _db
+                level = _db.get_user_level(sender_id)
+            except Exception:
+                level = "USER"
+
+            _hierarchy = {"OWNER": 3, "TRUSTED": 2, "SUDO": 2, "SUPPORT": 2, "USER": 1}
+            if _hierarchy.get(level, 1) < 2:
+                logger.debug(f"[compat] {required_right}: access denied for {sender_id} (level={level})")
+                return
+
+            # Проверяем реальные права в чате через Telethon
+            try:
+                from telethon.tl.functions.channels import GetParticipantRequest
+                from telethon.tl.types import ChannelParticipantAdmin, ChannelParticipantCreator
+
+                chat_id = getattr(event, 'chat_id', None)
+                if chat_id:
+                    participant = await client(GetParticipantRequest(chat_id, sender_id))
+                    p = participant.participant
+                    if isinstance(p, ChannelParticipantCreator):
+                        pass  # создатель — всё можно
+                    elif isinstance(p, ChannelParticipantAdmin):
+                        rights = p.admin_rights
+                        if required_right and not getattr(rights, required_right, False):
+                            logger.debug(f"[compat] {required_right}: no right for {sender_id}")
+                            return
+                    else:
+                        logger.debug(f"[compat] {required_right}: not admin {sender_id}")
+                        return
+            except Exception as e:
+                logger.debug(f"[compat] {required_right}: admin check failed ({e}), allowing OWNER/TRUSTED")
+
+            if self_ is not None:
+                return await func(self_, *args, **kwargs)
+            else:
+                return await func(event, *args, **kwargs)
+
+        for _attr in ("_is_command", "_is_watcher", "_is_callback_handler",
+                      "_is_inline_handler", "_command_name", "_command_kwargs",
+                      "_command_doc", "_watcher_kwargs"):
+            if hasattr(func, _attr):
+                setattr(wrapper, _attr, getattr(func, _attr))
+        return wrapper
+    return decorator
+
+
+def group_admin_ban_users(func):
+    """@loader.group_admin_ban_users — проверяет право ban_users в чате."""
+    return _group_admin_check("ban_users")(func)
+
+
+def group_admin_add_admins(func):
+    """@loader.group_admin_add_admins — проверяет право add_admins в чате."""
+    return _group_admin_check("add_admins")(func)
+
+
+def group_admin_delete_messages(func):
+    """@loader.group_admin_delete_messages — проверяет право delete_messages в чате."""
+    return _group_admin_check("delete_messages")(func)
+
+
+def group_admin_pin_messages(func):
+    """@loader.group_admin_pin_messages — проверяет право pin_messages в чате."""
+    return _group_admin_check("pin_messages")(func)
+
+
+def group_admin(func):
+    """@loader.group_admin — любое право администратора в чате."""
+    return _group_admin_check(None)(func)
+
+
 def loop(interval=1, autostart=False, **kwargs):
     """
     @loader.loop(interval=..., autostart=...) — периодическая задача (Hikka).
@@ -1593,6 +1715,32 @@ class _AllModules:
         # FHeta делает lm.allmodules.modules.remove(instance) при ошибке.
         self.modules: list = []
 
+    async def log(self, action: str, group: int = None, affected_uids: list = None, **kwargs):
+        """FTG allmodules.log() — логирует административное действие."""
+        uids_str = ", ".join(str(u) for u in (affected_uids or []))
+        logger.info(f"[allmodules.log] action={action} group={group} affected={uids_str}")
+
+    async def check_security(self, event, flags: int) -> bool:
+        """FTG allmodules.check_security() — проверяет права отправителя через KoteLoader database."""
+        try:
+            sender_id = getattr(event, "sender_id", None)
+            if sender_id is None:
+                return False
+            from utils import database as _db
+            level = _db.get_user_level(sender_id)
+            _hierarchy = {"OWNER": 3, "TRUSTED": 2, "SUDO": 2, "SUPPORT": 2, "USER": 1}
+            user_rank = _hierarchy.get(level, 1)
+            # flags — битмаска FTG: OWNER=1, SUDO=2, SUPPORT=4, EVERYONE=127
+            if flags & 1:    # OWNER
+                return user_rank >= 3
+            if flags & 2:    # SUDO
+                return user_rank >= 2
+            if flags & 4:    # SUPPORT
+                return user_rank >= 2
+            return True      # EVERYONE / PM / GROUP_MEMBER
+        except Exception:
+            return False
+
     async def register_module(self, spec, module_name: str,
                               origin: str = "", save_fs: bool = False,
                               **kwargs):
@@ -1812,7 +1960,7 @@ class _AllModules:
                     import asyncio as _aio, sys as _sys2
                     _proc = await _aio.create_subprocess_exec(
                         _sys2.executable, "-m", "pip", "install", "-q",
-                        "--disable-pip-version-check", _pkg,
+                        "--disable-pip-version-check", "--break-system-packages", _pkg,
                         stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE
                     )
                     _rc = await _proc.wait()

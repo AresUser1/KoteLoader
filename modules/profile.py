@@ -1,7 +1,7 @@
 # modules/profile.py
 """
 <manifest>
-version: 1.3.0
+version: 1.3.1
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/profile.py
 author: Kote
 </manifest>
