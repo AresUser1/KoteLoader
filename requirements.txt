@@ -5,3 +5,4 @@ gitpython
 distro
 qrcode
 requests
+python-socks

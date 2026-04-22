@@ -1,8 +1,7 @@
-
 # modules/admin.py
 """
 <manifest>
-version: 1.3.2
+version: 1.3.3
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/admin.py
 author: Kote
 </manifest>
@@ -639,6 +638,21 @@ async def restore_db_cmd(event):
         ])
 
         await asyncio.sleep(1.5)
+
+        # Корректно закрываем клиенты перед перезапуском.
+        # Без disconnect() SQLite-файл my_account.session остаётся
+        # заблокированным, и новый процесс падает с "database is locked".
+        try:
+            user_cl = event.client
+            bot_cl = getattr(user_cl, "_bot_client", None)
+            if bot_cl and bot_cl.is_connected():
+                await bot_cl.disconnect()
+            if user_cl.is_connected():
+                await user_cl.disconnect()
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)  # даём SQLite сбросить WAL на диск
+
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     except Exception as e:

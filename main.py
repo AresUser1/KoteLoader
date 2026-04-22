@@ -8,7 +8,7 @@ import sys
 import uuid
 import random
 from configparser import ConfigParser
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, connection
 from telethon.sessions import StringSession, MemorySession
 from telethon.errors import AccessTokenInvalidError, AccessTokenExpiredError, FloodWaitError
 
@@ -84,6 +84,107 @@ except ImportError as e:
     exit()
 
 START_TIME = time.time()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MTProto прокси — вспомогательные функции
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _parse_mtproto_link(link: str):
+    """
+    Разбирает ссылку вида:
+      tg://proxy?server=HOST&port=PORT&secret=SECRET
+    или просто:
+      HOST PORT SECRET   (через пробел/запятую)
+    Возвращает {'server': ..., 'port': ..., 'secret': ...} или None.
+    """
+    import urllib.parse
+    link = link.strip()
+    if not link:
+        return None
+
+    # Формат tg://proxy?... или https://t.me/proxy?...
+    if "proxy?" in link or "server=" in link:
+        try:
+            if link.startswith("tg://"):
+                qs = link.split("?", 1)[1]
+            else:
+                qs = link.split("?", 1)[1]
+            params = dict(urllib.parse.parse_qsl(qs))
+            server = params.get("server", "").strip()
+            port   = params.get("port", "").strip()
+            secret = params.get("secret", "").strip()
+            if server and port.isdigit() and secret:
+                return {"server": server, "port": int(port), "secret": secret}
+        except Exception:
+            pass
+        return None
+
+    # Формат "host port secret"
+    parts = link.replace(",", " ").split()
+    if len(parts) == 3 and parts[1].isdigit():
+        return {"server": parts[0], "port": int(parts[1]), "secret": parts[2]}
+
+    return None
+
+
+def _serialize_proxies(proxies: list) -> str:
+    """Сериализует список прокси в строку для config.ini."""
+    parts = []
+    for p in proxies:
+        parts.append(f"{p['server']}|{p['port']}|{p['secret']}")
+    return ";".join(parts)
+
+
+def _deserialize_proxies(raw: str) -> list:
+    """Десериализует строку из config.ini в список прокси."""
+    result = []
+    for item in raw.split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        parts = item.split("|")
+        if len(parts) == 3 and parts[1].isdigit():
+            result.append({"server": parts[0], "port": int(parts[1]), "secret": parts[2]})
+    return result
+
+
+def _build_proxy_kwargs(proxies: list) -> dict:
+    """
+    Возвращает kwargs для TelegramClient.
+    Telethon сам обрабатывает секрет через normalize_secret —
+    нужно передавать hex-строку как есть (с ee/dd префиксом).
+    """
+    if not proxies:
+        return {}
+    px = proxies[0]
+    return {
+        "connection": connection.ConnectionTcpMTProxyRandomizedIntermediate,
+        "proxy": (px["server"], px["port"], px["secret"]),
+    }
+
+
+def _setup_mtproto_proxies(prompt_fn, info_fn, C, Y, G, RST) -> list:
+    """
+    Интерактивный диалог для ввода одного или нескольких MTProto прокси.
+    Возвращает список {'server', 'port', 'secret'}.
+    """
+    proxies = []
+    print()
+    while True:
+        raw = prompt_fn(f"Ссылка на прокси или Enter чтобы {'пропустить' if not proxies else 'закончить'}")
+        if not raw:
+            break
+        parsed = _parse_mtproto_link(raw)
+        if parsed:
+            proxies.append(parsed)
+            print(f"  {G}✔{RST} Прокси добавлен: {Y}{parsed['server']}:{parsed['port']}{RST}")
+            print(f"  {C}›{RST} Можно добавить ещё один или нажми Enter чтобы продолжить\n")
+        else:
+            print(f"  \033[91m✘\033[0m Не удалось разобрать ссылку. Попробуй ещё раз.")
+    return proxies
+
+# ══════════════════════════════════════════════════════════════════════════════
+
 
 async def heartbeat():
     while True:
@@ -267,35 +368,65 @@ async def start_clients():
         _banner("ПЕРВОНАЧАЛЬНАЯ НАСТРОЙКА  •  KoteLoader")
         _info(f"Получи данные на {_Y}my.telegram.org{_RST} → API development tools")
         print()
-        api_id   = _prompt("api_id")
-        api_hash = _prompt("api_hash")
+        while True:
+            api_id = _prompt("api_id")
+            if api_id.strip().isdigit():
+                break
+            print(f"  \033[91m✘\033[0m api_id должен быть числом, попробуй ещё раз")
+        while True:
+            api_hash = _prompt("api_hash")
+            if api_hash.strip():
+                break
+            print(f"  \033[91m✘\033[0m api_hash не может быть пустым")
         session_name = "my_account"
-        
+
+        # ── MTProto прокси — спрашиваем при первой установке ────────────────
+        _banner("НАСТРОЙКА MTProto ПРОКСИ  •  KoteLoader")
+        _info("Если Telegram заблокирован — настрой MTProto прокси.")
+        _info(f"Формат ссылки: {_Y}tg://proxy?server=...&port=...&secret=...{_RST}")
+        print(f"  {_DIM}(нажми Enter чтобы пропустить){_RST}\n")
+        proxies_list = _setup_mtproto_proxies(_prompt, _info, _C, _Y, _G, _RST)
+
         config['telethon'] = {
-            'api_id': api_id, 
-            'api_hash': api_hash, 
+            'api_id': api_id,
+            'api_hash': api_hash,
             'session_name': session_name
         }
+        if proxies_list:
+            config['mtproto'] = {'proxies': _serialize_proxies(proxies_list)}
         with open(config_file, 'w', encoding='utf-8') as f:
             config.write(f)
+        # ─────────────────────────────────────────────────────────────────────
     else:
-        api_id = config.getint("telethon", "api_id")
-        api_hash = config.get("telethon", "api_hash")
-        session_name = config.get("telethon", "session_name")
+        _raw_api_id = config.get("telethon", "api_id", fallback="").strip()
+        if not _raw_api_id or not _raw_api_id.isdigit():
+            print(f"\n  \033[91m✘\033[0m  api_id в config.ini пустой или не является числом.")
+            print(f"  Открой config.ini и впиши корректный api_id (только цифры).\n")
+            sys.exit(1)
+        api_id = int(_raw_api_id)
+        api_hash = config.get("telethon", "api_hash", fallback="").strip()
+        if not api_hash:
+            print(f"\n  \033[91m✘\033[0m  api_hash в config.ini пустой.\n")
+            sys.exit(1)
+        session_name = config.get("telethon", "session_name", fallback="my_account")
 
-    # --- ПРАВКА: Используем стандартные параметры юзербота ---
-    system_version = "Linux"
-    device_model = "KoteLoader"
-    app_version = "2.0.0"
+    # ── Загружаем MTProto прокси из конфига ─────────────────────────────────
+    proxies_list = []
+    if config.has_section("mtproto"):
+        _raw = config.get("mtproto", "proxies", fallback="").strip()
+        if _raw:
+            proxies_list = _deserialize_proxies(_raw)
+
+    # ── Подключение с прокси (или без) ──────────────────────────────────────
+    proxy_kwargs = _build_proxy_kwargs(proxies_list)
 
     _info(f"Сессия: {_Y}{session_name}{_RST}  {_DIM}•  подключаюсь...{_RST}")
-    
-    user_client = TelegramClient(
-        session_name, 
-        api_id, 
-        api_hash
-    )
-    user_client.device_model = "KoteLoader" # Только для текста в бэкапах
+    if proxy_kwargs:
+        _info(f"Используется MTProto прокси: {_Y}{proxy_kwargs.get('proxy', ('?',))[0]}{_RST}")
+
+    # УБРАН преждевременный TelegramClient здесь — он открывал my_account.session
+    # до того как _make_client создавал второй клиент с тем же файлом,
+    # что приводило к "database is locked". Клиент создаётся ниже через _make_client.
 
     # ── КАСТОМНЫЕ ЦВЕТА ─────────────────────────────────────────────────────
     R  = "\033[91m"; G  = "\033[92m"; Y  = "\033[93m"; C  = "\033[96m"
@@ -314,7 +445,82 @@ async def start_clients():
     def prompt(text): return input(f"  {M}?{RST} {text}: ").strip()
     # ────────────────────────────────────────────────────────────────────────
 
-    await user_client.connect()
+    # ── Вспомогательная функция создания клиента ────────────────────────────
+    def _make_client(px_list):
+        if px_list:
+            pk = _build_proxy_kwargs(px_list)
+        else:
+            pk = {}
+        c = TelegramClient(session_name, api_id, api_hash, **pk)
+        c.device_model = "KoteLoader"
+        return c
+
+    # ── Подключение (с прокси или без, с фоллбэком) ─────────────────────────
+    async def _try_connect_proxy(px):
+        """Проверяет прокси через MemorySession (без записи на диск). Возвращает True или False."""
+        _info(f"Попытка подключения через прокси {_Y}{px['server']}:{px['port']}{_RST} ...")
+        c = None
+        try:
+            pk = _build_proxy_kwargs([px])
+            c = TelegramClient(MemorySession(), api_id, api_hash, **pk)
+            await asyncio.wait_for(c.connect(), timeout=15)
+            if c.is_connected():
+                print(f"  {_G}✔{_RST} Прокси {_Y}{px['server']}{_RST} работает!")
+                return True
+        except Exception as e:
+            print(f"  \033[91m✘\033[0m {px['server']}: {e}")
+        finally:
+            if c is not None:
+                try:
+                    await c.disconnect()
+                except Exception:
+                    pass
+        return False
+
+    if proxies_list:
+        connected_ok = False
+        for px in proxies_list:
+            connected_ok = await _try_connect_proxy(px)
+            if connected_ok:
+                proxy_kwargs = _build_proxy_kwargs([px])
+                user_client = _make_client([px])
+                await user_client.connect()
+                break
+        if not connected_ok:
+            while True:
+                print(f"\n  \033[91m✘\033[0m Ни один прокси не ответил.")
+                print(f"  {_Y}1{_RST} — Ввести другие прокси")
+                print(f"  {_Y}2{_RST} — Подключиться без прокси")
+                ch = _prompt("Ваш выбор (1/2)")
+                if ch == "1":
+                    new_px = _setup_mtproto_proxies(_prompt, _info, _C, _Y, _G, _RST)
+                    if not new_px:
+                        continue
+                    proxies_list.clear()
+                    proxies_list.extend(new_px)
+                    config['mtproto'] = {'proxies': _serialize_proxies(proxies_list)}
+                    with open(config_file, 'w', encoding='utf-8') as f:
+                        config.write(f)
+                    for px in proxies_list:
+                        connected_ok = await _try_connect_proxy(px)
+                        if connected_ok:
+                            proxy_kwargs = _build_proxy_kwargs([px])
+                            user_client = _make_client([px])
+                            await user_client.connect()
+                            break
+                    if connected_ok:
+                        break
+                elif ch == "2":
+                    _info("Подключение без прокси...")
+                    proxy_kwargs = {}
+                    user_client = _make_client([])
+                    await user_client.connect()
+                    break
+                else:
+                    print("  Введи 1 или 2")
+    else:
+        user_client = _make_client([])
+        await user_client.connect()
 
     if not await user_client.is_user_authorized():
         banner("АВТОРИЗАЦИЯ  •  KoteLoader")
@@ -332,6 +538,12 @@ async def start_clients():
             from telethon.errors import PasswordHashInvalidError
             while True:
                 pwd = input(f"  {M}?{RST} Пароль 2FA: ").strip()
+                # Фикс суррогатных символов при вводе на некоторых терминалах
+                try:
+                    pwd = pwd.encode('utf-8', errors='surrogatepass').decode('utf-8', errors='replace')
+                    pwd = pwd.encode('utf-8').decode('utf-8')
+                except Exception:
+                    pass
                 try:
                     await user_client.sign_in(password=pwd)
                     ok("2FA пройдена успешно!")
@@ -404,16 +616,14 @@ async def start_clients():
             while not signed_in:
                 print(f"\n  {DIM}Введи код — или выбери действие:{RST}")
                 print(f"  {Y}r{RST} — Отправить код повторно (в приложение)")
-                print(f"  {Y}s{RST} — Отправить через СМС")
                 print(f"  {Y}q{RST} — Выйти\n")
 
-                code = prompt("Код / r / s / q")
+                code = prompt("Код / r / q")
 
                 if code.lower() == "q":
                     exit(0)
-                elif code.lower() in ("r", "s"):
-                    force = code.lower() == "s"
-                    sent = await _send_code(force_sms=force)
+                elif code.lower() == "r":
+                    sent = await _send_code(force_sms=False)
                     continue
                 elif not code.strip():
                     warn("Пустой ввод — попробуй ещё раз")
@@ -485,7 +695,7 @@ async def start_clients():
         if bot_token:
             print(f"🚀 Проверка запуска бота...")
             try:
-                bot_client = TelegramClient(None, api_id, api_hash)
+                bot_client = TelegramClient(None, api_id, api_hash, **proxy_kwargs)
                 await bot_client.start(bot_token=bot_token)
                 print("✅ Бот успешно запущен!")
                 break 
@@ -529,6 +739,16 @@ async def start_clients():
 
     panel_pattern = re.compile(f"^{re.escape(loader.PREFIX)}(panel|settings)(?:\\s+(.*))?", re.IGNORECASE)
     user_client.add_event_handler(user_panel_helper, events.NewMessage(pattern=panel_pattern, outgoing=True))
+
+    # ── MTProto прокси команда (.proxy) ──────────────────────────────────────
+    from handlers.proxy_handler import proxy_command_handler
+    _proxy_pattern = re.compile(r"^\.proxy(?:\s+(.+))?$", re.IGNORECASE)
+    user_client.add_event_handler(
+        lambda e: proxy_command_handler(e, config, config_file, proxies_list),
+        events.NewMessage(pattern=_proxy_pattern, outgoing=True)
+    )
+    # ─────────────────────────────────────────────────────────────────────────
+
     user_client.add_event_handler(all_messages_handler)
 
     if bot_client:
@@ -565,6 +785,17 @@ async def main():
             print(f"[stags] Twin watchers зарегистрированы для {len(twin_manager.clients)} твинков.")
         except Exception as _twe:
             print(f"[stags] Не удалось зарегистрировать twin watchers: {_twe}")
+        try:
+            from modules.auto_manager import twin_auto_read_watcher
+            from telethon import events as _tl_events
+            for _twin_name, _twin_client in twin_manager.clients.items():
+                _twin_client.add_event_handler(
+                    twin_auto_read_watcher,
+                    _tl_events.NewMessage(incoming=True)
+                )
+            print(f"[auto_manager] Twin read watchers зарегистрированы для {len(twin_manager.clients)} твинков.")
+        except Exception as _awe:
+            print(f"[auto_manager] Не удалось зарегистрировать twin read watchers: {_awe}")
     except Exception as e:
         print(f"⚠️ Ошибка при запуске твинков: {e}")
 
