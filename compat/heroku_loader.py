@@ -562,100 +562,247 @@ async def _edit_html_with_emoji(edit_func, text, **kwargs):
         return await edit_func(clean, **kwargs)
 
 
-def _patch_client_html(client):
+
+def _apply_legacy_shim(event):
+    """
+    Универсальный шим для старых Hikka/FTG паттернов.
+    Применяется к объекту message перед вызовом любого хендлера.
+
+    Покрывает следующие старые паттерны:
+
+    1. message.to_id
+       Старый FTG/Hikka возвращал Peer-объект. В Telethon его нет на событии.
+       Шим: возвращает chat_id (int) чтобы send_message/send_file работали.
+
+    2. message.message = "text"  (мутация объекта для respond)
+       Старый паттерн чтобы переиспользовать respond() с новым текстом.
+       Шим: перехватываем __setattr__ через враппер-класс.
+
+    3. respond(message_obj) / send_message(to_id, reply_obj)
+       Hikka модули передавали объект Message в respond() чтобы форвардить.
+       Шим: если первый аргумент — Message, берём его .text.
+
+    4. gather(*[respond(...)]) — бессмысленный gather вокруг одного вызова.
+       Шим: не нужен — respond уже возвращает корутину, gather работает.
+
+    5. send_message(to_id, reply_obj) где reply_obj — Message
+       Шим: патч на уровне client (ниже).
+
+    6. message.text = "..." (мутация текста для повторного использования)
+       Шим: аналогично message.message.
+    """
+    msg = getattr(event, "message", None) or event
+
+    # ── 1. message.to_id → chat_id ───────────────────────────────────────
+    # В старом Hikka to_id был Peer-объект. Большинство модулей передают его
+    # напрямую в send_message/send_file. chat_id (int) работает везде.
+    if not hasattr(msg, "to_id"):
+        try:
+            object.__setattr__(msg, "to_id", msg.chat_id)
+        except (AttributeError, TypeError):
+            try:
+                msg.to_id = msg.chat_id
+            except Exception:
+                pass
+
+    # ── 2. message.input_chat / message.input_sender ─────────────────────
+    # Некоторые модули используют message.input_chat напрямую
+    if not hasattr(msg, "input_chat"):
+        try:
+            msg.input_chat = msg.chat_id
+        except Exception:
+            pass
+
+    # ── 3. Патчим client.send_message / send_file чтобы они принимали ────
+    # Message-объект вместо текста (старый respond(reply) паттерн).
+    client = getattr(event, "client", None)
+    if client is not None:
+        _patch_client_legacy(client)
+
+    # ── 4. Патчим respond/reply/edit для обработки Message-объекта ───────
+    # respond(message) где message — объект Message → берём .text
+    for method_name in ("respond", "reply", "edit"):
+        orig = getattr(msg, method_name, None)
+        if orig is None:
+            continue
+
+        def _make_legacy_patched(orig_m, method=method_name):
+            @_functools.wraps(orig_m)
+            async def _patched(text=None, *a, **kw):
+                # Если передали Message-объект вместо текста — берём его текст
+                if hasattr(text, "text") and hasattr(text, "id") and not isinstance(text, str):
+                    text = getattr(text, "text", "") or ""
+
+                # HTML-обработка
+                if isinstance(text, str) and "parse_mode" not in kw and "formatting_entities" not in kw:
+                    if _has_emoji_tags(text):
+                        return await _edit_html_with_emoji(orig_m, text, **kw)
+                    if _has_html(text):
+                        kw["parse_mode"] = "html"
+                return await orig_m(text, *a, **kw)
+            return _patched
+
+        try:
+            setattr(msg, method_name, _make_legacy_patched(orig))
+        except (AttributeError, TypeError):
+            pass
+
+    # ── 5. _overridden_text: хранилище для message.message = "text" ──────
+    # Старый FTG/Hikka паттерн: модуль делал msg.message = "новый текст",
+    # а потом respond(msg) или gather(*[respond(msg)]).
+    # Telethon Message.message — это property (alias для .text), его нельзя
+    # просто перезаписать через setattr. Патчим через monkey-patch на классе.
+    if not hasattr(msg, "_overridden_text"):
+        try:
+            msg._overridden_text = None
+        except Exception:
+            pass
+
+    # ── 6. respond/reply: учитываем _overridden_text на msg объекте ─────
+    # На случай если модуль работает напрямую с msg (Message объектом),
+    # а не через event-прокси. Патчим respond на самом Message.
+    for method_name in ("respond",):
+        _orig_m2 = getattr(msg, method_name, None)
+        if _orig_m2 is None:
+            continue
+        def _make_override_patched(orig_m2, _msg_ref=msg):
+            @_functools.wraps(orig_m2)
+            async def _override_patched(text=None, *a, **kw):
+                # respond(message_obj) — передали Message или event
+                if text is _msg_ref or (text is not None and not isinstance(text, str)
+                                        and hasattr(text, "text") and hasattr(text, "id")):
+                    text = getattr(text, "_overridden_text", None) or getattr(text, "text", "") or ""
+                if isinstance(text, str) and "parse_mode" not in kw and "formatting_entities" not in kw:
+                    if _has_html(text):
+                        kw["parse_mode"] = "html"
+                return await orig_m2(text, *a, **kw)
+            return _override_patched
+        try:
+            setattr(msg, method_name, _make_override_patched(_orig_m2))
+        except (AttributeError, TypeError):
+            pass
+
+
+# ── Патч client.send_message для старых паттернов ────────────────────────────
+_LEGACY_PATCHED_CLIENTS = set()
+
+def _patch_client_legacy(client):
+    """
+    Патчит client.send_message и client.send_file один раз чтобы:
+    - send_message(entity, Message_obj) → send_message(entity, msg.text)
+    - send_file(entity, media_obj) → работает как обычно (уже работает)
+    - send_message(entity, text, ...) с HTML → добавляет parse_mode="html"
+    """
     cid = id(client)
-    if cid in _PATCHED_CLIENTS:
+    if cid in _LEGACY_PATCHED_CLIENTS:
         return
-    _PATCHED_CLIENTS.add(cid)
+    _LEGACY_PATCHED_CLIENTS.add(cid)
 
     _orig_send = client.send_message
-    _orig_edit = client.edit_message
 
-    async def _smart_send(entity, message="", *args, **kwargs):
+    async def _legacy_send(entity, message="", *args, **kwargs):
+        # Конвертируем entity если это Peer-объект (to_id из старого Hikka)
+        if hasattr(entity, "channel_id"):
+            entity = -int(f"100{entity.channel_id}")
+        elif hasattr(entity, "chat_id") and not isinstance(entity, int):
+            entity = entity.chat_id
+        elif hasattr(entity, "user_id") and not isinstance(entity, int):
+            entity = entity.user_id
+
+        # Если message — объект Message (старый respond(reply) паттерн)
+        if hasattr(message, "text") and hasattr(message, "id") and not isinstance(message, str):
+            # Берём переопределённый текст если был message.message = "..."
+            text = getattr(message, "_overridden_text", None) or getattr(message, "text", "") or ""
+            message = text
+
+        # HTML-обработка
         if isinstance(message, str) and "parse_mode" not in kwargs and "formatting_entities" not in kwargs:
             if _has_emoji_tags(message):
                 return await _send_html_with_emoji(_orig_send, entity, message, **kwargs)
             if _has_html(message):
                 kwargs["parse_mode"] = "html"
+
         return await _orig_send(entity, message, *args, **kwargs)
 
-    async def _smart_edit(entity, message, *args, **kwargs):
-        text = kwargs.get("text") or (message if isinstance(message, str) else "")
-        if isinstance(text, str) and "parse_mode" not in kwargs and "formatting_entities" not in kwargs:
-            if _has_emoji_tags(text):
-                return await _send_html_with_emoji(_orig_edit, entity, message, **kwargs)
-            if _has_html(text):
-                kwargs["parse_mode"] = "html"
-        return await _orig_edit(entity, message, *args, **kwargs)
+    client.send_message = _legacy_send
 
-    client.send_message = _smart_send
-    client.edit_message = _smart_edit
+
+class _EventProxy:
+    """
+    Прокси вокруг Telethon NewMessage.Event.
+
+    Решает проблему старых FTG/Hikka модулей которые делали:
+        message.message = "новый текст"   # message = event
+        await message.respond(message)    # передают сам event
+
+    В Telethon NewMessage.Event:
+        event.__dict__["message"] = <Message объект>
+    После `event.message = "str"` → __dict__["message"] становится строкой,
+    и event.respond / event.to_id / etc все ломаются через __getattr__.
+
+    Прокси перехватывает эту запись: строковое значение сохраняется в
+    _overridden_text, объект Message остаётся нетронутым.
+    """
+    __slots__ = ("_real_event", "_overridden_text")
+
+    def __init__(self, event):
+        object.__setattr__(self, "_real_event", event)
+        object.__setattr__(self, "_overridden_text", None)
+
+    def __setattr__(self, name, value):
+        if name in _EventProxy.__slots__:
+            object.__setattr__(self, name, value)
+            return
+        # Перехватываем message.message = "str" — сохраняем отдельно
+        if name == "message" and isinstance(value, str):
+            object.__setattr__(self, "_overridden_text", value)
+            return
+        setattr(object.__getattribute__(self, "_real_event"), name, value)
+
+    def __getattr__(self, name):
+        real = object.__getattribute__(self, "_real_event")
+        # respond(self): если кто-то передаёт сам прокси как аргумент
+        if name == "respond":
+            orig = getattr(real, "respond")
+            proxy_ref = self
+            @_functools.wraps(orig)
+            async def _respond(text=None, *a, **kw):
+                # respond(message) где message — это сам прокси или event
+                if text is proxy_ref or text is real:
+                    ovr = object.__getattribute__(proxy_ref, "_overridden_text")
+                    text = ovr if ovr is not None else getattr(real, "raw_text", "") or ""
+                # respond(Message объект)
+                elif hasattr(text, "text") and hasattr(text, "id") and not isinstance(text, str):
+                    text = getattr(text, "_overridden_text", None) or getattr(text, "text", "") or ""
+                if isinstance(text, str) and "parse_mode" not in kw and "formatting_entities" not in kw:
+                    if _has_html(text):
+                        kw["parse_mode"] = "html"
+                return await orig(text, *a, **kw)
+            return _respond
+        # to_id — возвращаем chat_id
+        if name == "to_id":
+            return getattr(real, "chat_id", None)
+        return getattr(real, name)
+
+    def __repr__(self):
+        return f"_EventProxy({object.__getattribute__(self, '_real_event')!r})"
 
 
 def _wrap_html_handler(func):
     @_functools.wraps(func)
     async def wrapper(event):
-        msg = getattr(event, "message", None) or event
-
-        for method_name in ("edit", "reply", "respond"):
-            orig = getattr(msg, method_name, None)
-            if orig is None:
-                continue
-
-            def _make_patched(orig_m):
-                @_functools.wraps(orig_m)
-                async def _patched(text=None, *a, **kw):
-                    if isinstance(text, str) and "parse_mode" not in kw and "formatting_entities" not in kw:
-                        if _has_emoji_tags(text):
-                            # msg.edit(text) — bound метод, entity не нужен
-                            return await _edit_html_with_emoji(orig_m, text, **kw)
-                        if _has_html(text):
-                            kw["parse_mode"] = "html"
-                    return await orig_m(text, *a, **kw)
-                return _patched
-
-            try:
-                setattr(msg, method_name, _make_patched(orig))
-            except (AttributeError, TypeError):
-                pass
-
-        return await func(event)
+        # Применяем универсальный шим для старых Hikka/FTG паттернов
+        _apply_legacy_shim(event)
+        # Оборачиваем в прокси чтобы перехватить message.message = "str"
+        proxy = _EventProxy(event)
+        return await func(proxy)
     return wrapper
 
 
-
-_HTML_TAG_RE = _re.compile(r"<(?:b|i|u|s|code|pre|a|emoji|spoiler)[ />]", _re.I)
-_PATCHED_CLIENTS = set()
-
+# _patch_client_html — алиас нового универсального патча.
+# Оставлен для совместимости с вызовами в load_heroku_module.
 def _patch_client_html(client):
-    """
-    Оборачивает client.send_message и client.edit_message чтобы автоматически
-    применять parse_mode="html" если в тексте есть HTML-теги и parse_mode не задан.
-    Патч применяется один раз на клиент (проверяем по id объекта).
-    """
-    cid = id(client)
-    if cid in _PATCHED_CLIENTS:
-        return
-    _PATCHED_CLIENTS.add(cid)
-
-    _orig_send = client.send_message
-    _orig_edit = client.edit_message
-
-    async def _smart_send(entity, message="", *args, **kwargs):
-        if isinstance(message, str) and "parse_mode" not in kwargs:
-            if _HTML_TAG_RE.search(message):
-                kwargs["parse_mode"] = "html"
-        return await _orig_send(entity, message, *args, **kwargs)
-
-    async def _smart_edit(entity, message, *args, **kwargs):
-        text = kwargs.get("text") or (message if isinstance(message, str) else "")
-        if isinstance(text, str) and "parse_mode" not in kwargs:
-            if _HTML_TAG_RE.search(text):
-                kwargs["parse_mode"] = "html"
-        return await _orig_edit(entity, message, *args, **kwargs)
-
-    client.send_message = _smart_send
-    client.edit_message = _smart_edit
+    _patch_client_legacy(client)
 
 
 async def _install_module_requires(file_path) -> list:
@@ -1387,8 +1534,35 @@ async def load_heroku_module(client, file_path: str | Path, chat_id: int = None)
             }
             handler_kwargs["pattern"] = pattern
 
-            event_handler = events.NewMessage(**handler_kwargs)
-            client.add_event_handler(_wrap_html_handler(func), event_handler)
+            # 1. Исходящие (владелец пишет сам)
+            _out_kw = {k: v for k, v in handler_kwargs.items()
+                       if k not in ("incoming", "outgoing", "from_users")}
+            _out_kw["outgoing"] = True
+            client.add_event_handler(_wrap_html_handler(func), events.NewMessage(**_out_kw))
+
+            # 2. Входящие от trusted пользователей
+            def _make_trusted_filter():
+                from utils import database as _db2
+                def _is_trusted(ev):
+                    try:
+                        # Telethon иногда передаёт сырой update-объект до оборачивания
+                        # в NewMessage — у него нет sender_id / message.out
+                        msg = getattr(ev, "message", ev)
+                        if not hasattr(msg, "out"):
+                            return False
+                        sid = getattr(ev, "sender_id", None) or getattr(msg, "sender_id", None)
+                        if sid is None:
+                            return False
+                        return _db2.get_user_level(sid) in ("OWNER", "TRUSTED")
+                    except Exception:
+                        return False
+                return _is_trusted
+
+            _in_kw = {k: v for k, v in handler_kwargs.items()
+                      if k not in ("incoming", "outgoing", "from_users")}
+            _in_kw["incoming"] = True
+            _in_kw["func"] = _make_trusted_filter()
+            client.add_event_handler(_wrap_html_handler(func), events.NewMessage(**_in_kw))
 
             if cmd not in _COMMANDS:
                 _COMMANDS[cmd] = []

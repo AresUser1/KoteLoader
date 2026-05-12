@@ -104,7 +104,16 @@ async def build_and_edit(
         if getattr(event, 'out', False):
             return await event.edit(final_text, **send_kwargs)
         else:
-            # Иначе отвечаем
+            # Для форум-тем: при respond передаём reply_to темы чтобы ответ
+            # попал в нужную тему, а не в General
+            if 'reply_to' not in send_kwargs:
+                try:
+                    from utils.topics import get_topic_id
+                    tid = get_topic_id(event)
+                    if tid:
+                        send_kwargs['reply_to'] = tid
+                except Exception:
+                    pass
             return await event.respond(final_text, **send_kwargs)
             
     except MessageNotModifiedError:

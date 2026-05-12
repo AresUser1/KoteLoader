@@ -247,10 +247,41 @@ async def load_module(client, module_name: str, chat_id: int = None) -> dict:
             if getattr(func, "_is_command", False):
                 command_name, handler_args, doc = func._command_name, func._command_kwargs, func._command_doc
                 pattern_text = re.escape(PREFIX) + command_name + r"(?:\s+(.*))?$"
-                handler_args["pattern"] = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
-                handler = events.NewMessage(**handler_args)
+                _pat = re.compile(pattern_text, re.IGNORECASE | re.DOTALL)
+
+                # 1. Исходящие (владелец пишет сам)
+                _out_args = {k: v for k, v in handler_args.items()
+                             if k not in ("incoming", "outgoing", "from_users")}
+                _out_args["outgoing"] = True
+                _out_args["pattern"] = _pat
+                handler = events.NewMessage(**_out_args)
                 client.add_event_handler(func, handler)
                 registered_handlers.append((func, handler))
+
+                # 2. Входящие от trusted пользователей
+                def _make_trusted_filter():
+                    from utils import database as _db2
+                    def _is_trusted(ev):
+                        try:
+                            msg = getattr(ev, "message", ev)
+                            if not hasattr(msg, "out"):
+                                return False
+                            sid = getattr(ev, "sender_id", None) or getattr(msg, "sender_id", None)
+                            if sid is None:
+                                return False
+                            return _db2.get_user_level(sid) in ("OWNER", "TRUSTED")
+                        except Exception:
+                            return False
+                    return _is_trusted
+
+                _in_args = {k: v for k, v in handler_args.items()
+                            if k not in ("incoming", "outgoing", "from_users")}
+                _in_args["incoming"] = True
+                _in_args["func"] = _make_trusted_filter()
+                _in_args["pattern"] = _pat
+                handler_in = events.NewMessage(**_in_args)
+                client.add_event_handler(func, handler_in)
+                registered_handlers.append((func, handler_in))
                 if command_name not in COMMANDS_REGISTRY: COMMANDS_REGISTRY[command_name] = []
                 COMMANDS_REGISTRY[command_name].append({"module": module_name, "doc": doc or "Нет описания"})
 

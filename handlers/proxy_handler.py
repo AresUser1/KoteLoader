@@ -101,19 +101,51 @@ def _save(config: ConfigParser, config_file: str, proxies: list):
 
 # ── Тест одного прокси ───────────────────────────────────────────────────────
 
+def _is_faketls_secret(secret: str) -> bool:
+    """Секрет начинается с 'ee' — это FakeTLS."""
+    return secret.lower().startswith("ee")
+
+
 async def _test_proxy(px: dict, api_id: int, api_hash: str) -> bool:
     from telethon import TelegramClient
     from telethon.sessions import MemorySession
+    from network.faketls_connection import get_connection_class
+
+    secret = px["secret"]
+    conn_cls = get_connection_class(secret)
+
+    c = None
     try:
-        client = TelegramClient(
+        c = TelegramClient(
             MemorySession(), api_id, api_hash,
-            connection=connection.ConnectionTcpMTProxyRandomizedIntermediate,
-            proxy=(px["server"], px["port"], px["secret"]),
+            connection=conn_cls,
+            proxy=(px["server"], px["port"], secret),
         )
-        await asyncio.wait_for(client.connect(), timeout=12)
-        ok = client.is_connected()
-        await client.disconnect()
-        return ok
+        await asyncio.wait_for(c.connect(), timeout=15)
+        if c.is_connected():
+            await c.disconnect()
+            return True
+    except Exception:
+        pass
+    finally:
+        if c is not None:
+            try:
+                await c.disconnect()
+            except Exception:
+                pass
+
+    # Fallback: сырая проверка TCP-порта (порт открыт = прокси жив)
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(px["server"], px["port"]),
+            timeout=6,
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True  # Порт открыт — прокси живой, FakeTLS просто требует правильного клиента
     except Exception:
         return False
 

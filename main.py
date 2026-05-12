@@ -151,14 +151,19 @@ def _deserialize_proxies(raw: str) -> list:
 def _build_proxy_kwargs(proxies: list) -> dict:
     """
     Возвращает kwargs для TelegramClient.
-    Telethon сам обрабатывает секрет через normalize_secret —
-    нужно передавать hex-строку как есть (с ee/dd префиксом).
+
+    Автоматически выбирает нужный класс соединения:
+    - 'ee...' (FakeTLS) → ConnectionTcpMTProxyFakeTLS — делает полноценный TLS handshake
+    - 'dd...'           → ConnectionTcpMTProxyRandomizedIntermediate
+    - иное              → ConnectionTcpMTProxyIntermediate
     """
     if not proxies:
         return {}
     px = proxies[0]
+    from network.faketls_connection import get_connection_class
+    conn_cls = get_connection_class(px["secret"])
     return {
-        "connection": connection.ConnectionTcpMTProxyRandomizedIntermediate,
+        "connection": conn_cls,
         "proxy": (px["server"], px["port"], px["secret"]),
     }
 

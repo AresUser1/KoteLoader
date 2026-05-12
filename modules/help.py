@@ -1,7 +1,7 @@
 # modules/help.py
 """
 <manifest>
-version: 1.3.0
+version: 1.4.0
 source: https://github.com/AresUser1/KoteLoader/raw/main/modules/help.py
 author: Kote
 </manifest>
@@ -32,7 +32,7 @@ USAGE_EMOJI_ID         = 5197195523794157505
 SYSTEM_MODULES = [
     "admin", "help", "install", "modules", "updater", "ping", "profile",
     "config", "hider", "power", "git_manager", "core_updater", "about",
-    "aliases", "twins", "private",
+    "aliases", "twins", "private", "heroku_cfg"
 ]
 
 MAX_LEN = 4096
